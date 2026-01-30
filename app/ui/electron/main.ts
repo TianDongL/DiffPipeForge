@@ -658,7 +658,11 @@ app.whenReady().then(() => {
         let scriptPath = '';
 
         if (app.isPackaged) {
-          scriptPath = path.join(process.resourcesPath, 'backend', 'monitor.py');
+          // In packaged app, extraFiles are placed relative to the exe directory
+          // The exe is at: win-unpacked/DiffPipeForge.exe
+          // Backend files are at: win-unpacked/app/backend/
+          const exeDir = path.dirname(app.getPath('exe'));
+          scriptPath = path.join(exeDir, 'app', 'backend', 'monitor.py');
         } else {
           // Try both app/backend and backend/
           const candidates = [

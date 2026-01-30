@@ -122,3 +122,4 @@ package_app.bat
 
 *.zip
 *.iss
+package_app.py

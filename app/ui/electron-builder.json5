@@ -24,6 +24,11 @@
     {
       "from": "../requirements.txt",
       "to": "app/requirements.txt"
+    },
+    {
+      "from": "../examples",
+      "to": "app/examples",
+      "filter": ["**/*"]
     }
   ],
   "win": {
