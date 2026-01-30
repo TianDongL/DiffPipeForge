@@ -65,17 +65,18 @@ DiffPipeForge/
 ### 前置条件
 
   **Python 环境**：确保已安装 Python 3.10+。
-    ```bash
+
+```bash
     git clone --recurse-submodules https://github.com/TianDongL/DiffPipeForge.git
-    ```
+```
 
   **安装依赖**：
-    ```bash
+```bash
     pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
-
+```
+```bash
     pip install -r requirements.txt
-
-    ```
+```
     
 
 ### 启动应用

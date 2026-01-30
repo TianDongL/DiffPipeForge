@@ -65,21 +65,26 @@ DiffPipeForge/
 ### Prerequisites
 
   **Python Environment**: Ensure you have a Python 3.10+ environment installed.
-      ```bash
+
+```bash
     git clone --recurse-submodules https://github.com/TianDongL/DiffPipeForge.git
-    ```
+```
 
   **Dependencies**:
-    ```bash
+
+```bash
     pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
-    
+```
+
+```bash
     pip install -r requirements.txt
-    ```
+```
     
 
 ### Launching the App
 
 Simply run the `start.bat` file in the project root:
+
 ```bash
 ./start.bat
 ```
