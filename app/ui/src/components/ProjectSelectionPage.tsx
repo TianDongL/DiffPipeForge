@@ -24,6 +24,7 @@ export function ProjectSelectionPage({ onSelect }: ProjectSelectionPageProps) {
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
     const [versionDialogOpen, setVersionDialogOpen] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
 
     useEffect(() => {
         const loadProjects = async () => {
@@ -83,7 +84,79 @@ export function ProjectSelectionPage({ onSelect }: ProjectSelectionPageProps) {
     };
 
     return (
-        <div className="flex flex-col h-screen w-full items-center justify-center bg-gradient-to-br from-gray-50 to-gray-200 dark:from-gray-950 dark:to-gray-900 overflow-hidden relative p-8">
+        <div
+            className="flex flex-col h-screen w-full items-center justify-center bg-gradient-to-br from-gray-50 to-gray-200 dark:from-gray-950 dark:to-gray-900 overflow-hidden relative p-8"
+            onDragOver={(e) => {
+                e.preventDefault();
+                if (e.dataTransfer) {
+                    e.dataTransfer.dropEffect = 'copy';
+                }
+                if (e.dataTransfer.types.includes('Files')) {
+                    setIsDragging(true);
+                }
+            }}
+            onDragLeave={(e) => {
+                e.preventDefault();
+                if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget as Node)) {
+                    return;
+                }
+                setIsDragging(false);
+            }}
+            onDrop={async (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+
+                // Copy logic from single card drop, but for the whole page
+                if (!e.dataTransfer.types.includes('Files')) return;
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const file = e.dataTransfer.files[0];
+                    const filePath = (file as any).path;
+                    const fileName = (file as any).name;
+
+                    if (fileName.endsWith('.toml')) {
+                        // Reuse TOML logic
+                        try {
+                            const content = await window.ipcRenderer.invoke('read-file', filePath);
+                            if (content) {
+                                const parsed = parse(content);
+                                let targetName = fileName;
+                                if (parsed.model || parsed.optimizer || parsed.output_dir || parsed.training_arguments || parsed.dataset) {
+                                    targetName = 'trainconfig.toml';
+                                } else if (parsed.directory || (parsed.datasets && Array.isArray(parsed.datasets) && (parsed.datasets as any[])[0]?.enable_ar_bucket !== undefined)) {
+                                    targetName = 'dataset.toml';
+                                } else if (parsed.datasets) {
+                                    targetName = 'evaldataset.toml';
+                                }
+
+                                const copyResult = await window.ipcRenderer.invoke('copy-to-date-folder', {
+                                    sourcePath: filePath,
+                                    filename: targetName
+                                });
+
+                                if (copyResult.success) {
+                                    const savedPath = copyResult.path;
+                                    const folderPath = savedPath.substring(0, Math.max(savedPath.lastIndexOf('/'), savedPath.lastIndexOf('\\')));
+                                    await addToHistory(folderPath);
+                                    onSelect(folderPath);
+                                }
+                            }
+                        } catch (err) { console.error('Full page drop error:', err); }
+                    } else {
+                        // Folder or other
+                        const result = await window.ipcRenderer.invoke('copy-folder-configs-to-date', {
+                            sourceFolderPath: filePath
+                        });
+                        if (result.success) {
+                            await addToHistory(result.outputFolder);
+                            onSelect(result.outputFolder);
+                        } else {
+                            await addToHistory(filePath);
+                            onSelect(filePath);
+                        }
+                    }
+                }
+            }}
+        >
             {/* Background blobs */}
             <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-purple-500/20 rounded-full blur-[100px] animate-blob pointer-events-none" />
             <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-blue-500/20 rounded-full blur-[100px] animate-blob animation-delay-2000 pointer-events-none" />
@@ -250,6 +323,16 @@ export function ProjectSelectionPage({ onSelect }: ProjectSelectionPageProps) {
                     </GlassCard>
                 </div>
 
+                {isDragging && (
+                    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+                        <div className="border-4 border-dashed border-primary/50 m-8 rounded-3xl p-20 text-center animate-in fade-in zoom-in-95 duration-300 bg-black/20">
+                            <Plus className="w-32 h-32 mx-auto text-primary mb-6 animate-bounce" />
+                            <h2 className="text-4xl font-bold text-white mb-4">{t('drop_zone.title') || 'Drop Project Here'}</h2>
+                            <p className="text-xl text-white/80">{t('drop_zone.desc') || 'Drop folder or TOML to open project'}</p>
+                        </div>
+                    </div>
+                )}
+
                 <div className="space-y-4">
                     <div className="flex items-center justify-between px-1">
                         <h2 className="text-xl font-semibold">{t('project.recent')}</h2>
@@ -376,6 +459,6 @@ export function ProjectSelectionPage({ onSelect }: ProjectSelectionPageProps) {
                 confirmText={t('common.confirm_delete')}
                 cancelText={t('common.cancel')}
             />
-        </div>
+        </div >
     );
 }

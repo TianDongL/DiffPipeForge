@@ -18,6 +18,27 @@ export default function App() {
                 i18n.changeLanguage(lang);
             }
         });
+
+        // Global drag-drop handlers to fix WSL2/Network path issues and 🚫 icon
+        const handleGlobalDragOver = (e: DragEvent) => {
+            e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+        };
+        const handleGlobalDrop = (e: DragEvent) => {
+            // Prevent browser from opening files if dropped outside targets
+            if (e.target === document.body || e.target === document.documentElement) {
+                e.preventDefault();
+            }
+        };
+
+        window.addEventListener('dragover', handleGlobalDragOver);
+        window.addEventListener('drop', handleGlobalDrop);
+        return () => {
+            window.removeEventListener('dragover', handleGlobalDragOver);
+            window.removeEventListener('drop', handleGlobalDrop);
+        };
     }, [i18n]);
 
     const handleProjectSelect = (path: string) => {

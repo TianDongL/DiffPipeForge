@@ -243,6 +243,10 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
+        // Force copy effect to allow WSL2/Network paths (fixes 🚫 icon)
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'copy';
+        }
         // Only allow dropping files
         if (e.dataTransfer.types.includes('Files')) {
             setIsDragging(true);
