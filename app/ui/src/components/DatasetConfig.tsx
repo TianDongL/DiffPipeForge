@@ -279,16 +279,16 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
             if (isTraining) {
                 const trainLines = [baseContent];
                 trainLines.push('\n[[directory]]');
-                const inputPath = formData.input_path.replace(/\//g, '\\');
+                const inputPath = formData.input_path.replace(/\\/g, '/');
                 trainLines.push(`path = '${inputPath}'`);
                 trainLines.push(`num_repeats = ${Number(formData.num_repeats)}`);
 
                 const validControlPaths = isEditingModel ? formData.control_paths : [];
                 if (isEditingModel) {
                     if (validControlPaths.length === 1) {
-                        trainLines.push(`control_path = '${validControlPaths[0].replace(/\//g, '\\')}'`);
+                        trainLines.push(`control_path = '${validControlPaths[0].replace(/\\/g, '/')}'`);
                     } else {
-                        const pathsArray = validControlPaths.map(p => `'${p.replace(/\//g, '\\')}'`).join(', ');
+                        const pathsArray = validControlPaths.map(p => `'${p.replace(/\\/g, '/')}'`).join(', ');
                         trainLines.push(`control_path = [${pathsArray}]`);
                     }
                 }
@@ -312,7 +312,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                     const set = formData.eval_sets[i];
                     const evalLines = [baseContent];
                     evalLines.push('\n[[directory]]');
-                    evalLines.push(`path = '${set.path.replace(/\//g, '\\')}'`);
+                    evalLines.push(`path = '${set.path.replace(/\\/g, '/')}'`);
                     evalLines.push(`num_repeats = 1`); // Evaluation usually repeats 1
 
                     const filename = i === 0 ? 'evaldataset.toml' : `evaldataset_${i}.toml`;
