@@ -26,13 +26,14 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
         i_know_what_i_am_doing: false,
         dump_dataset: ''
     });
+    const [isLoaded, setIsLoaded] = useState(false);
     const [configSummary, setConfigSummary] = useState<{
         model_type: string;
         epochs: number;
         output_dir: string;
     } | null>(null);
 
-    // Initial check for training status
+    // Initial check for training status and status updates
     useEffect(() => {
         const checkStatus = async () => {
             const status = await window.ipcRenderer.invoke('get-training-status');
@@ -50,6 +51,56 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
             window.ipcRenderer.off('training-status', handleStatus);
         };
     }, []);
+
+    // Load saved launcher params for this project
+    useEffect(() => {
+        const loadParams = async () => {
+            if (!projectPath) {
+                setIsLoaded(false);
+                return;
+            }
+            try {
+                const savedParams = await window.ipcRenderer.invoke('get-project-launch-params', projectPath);
+                if (savedParams && Object.keys(savedParams).length > 0) {
+                    setStartParams(prev => ({
+                        ...prev,
+                        ...savedParams
+                    }));
+                } else {
+                    // Reset to defaults if no saved params for this project
+                    setStartParams({
+                        resume_from_checkpoint: '',
+                        regenerate_cache: false,
+                        trust_cache: false,
+                        cache_only: false,
+                        reset_dataloader: false,
+                        reset_optimizer_params: false,
+                        i_know_what_i_am_doing: false,
+                        dump_dataset: ''
+                    });
+                }
+                setIsLoaded(true);
+            } catch (e) {
+                console.error("Failed to load project launcher params:", e);
+                setIsLoaded(true); // Still mark as loaded to allow editing
+            }
+        };
+        loadParams();
+    }, [projectPath]);
+
+    // Save launcher params when changed (debounced)
+    useEffect(() => {
+        if (!isLoaded || !projectPath) return;
+
+        const timer = setTimeout(() => {
+            window.ipcRenderer.invoke('save-project-launch-params', {
+                projectPath,
+                params: startParams
+            });
+        }, 1000);
+
+        return () => clearTimeout(timer);
+    }, [startParams, projectPath, isLoaded]);
 
     // Load current config for summary and to ensure paths exist
     useEffect(() => {

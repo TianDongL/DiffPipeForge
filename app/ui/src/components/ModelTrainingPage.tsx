@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { GlassButton } from "./ui/GlassButton";
 import { Save, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { GlassCard } from "./ui/GlassCard";
 import { GlassConfirmDialog } from "./ui/GlassConfirmDialog";
 import { useGlassToast } from "./ui/GlassToast";
 import { ModelConfig } from "./ModelConfig";
@@ -230,12 +229,6 @@ export function ModelTrainingPage({
                         const segments = fullPath.split('/').filter(Boolean);
                         let basename = segments.pop() || 'mylora';
 
-                        // If the imported output_dir is exactly the same as the project root folder,
-                        // reset the subfolder name to 'mylora' to avoid redundant nesting (e.g. test/test)
-                        const currentPath = (projectPath || '').replace(/\\/g, '/');
-                        if (currentPath.endsWith('/' + basename) || currentPath === basename) {
-                            basename = 'mylora';
-                        }
                         tData.output_folder_name = basename;
                     } else if (key === 'activation_checkpointing') {
                         tData[key] = String(importedConfig[key]);
@@ -815,19 +808,6 @@ export function ModelTrainingPage({
                 }
             }}
         >
-            {/* Top Action Bar */}
-            <GlassCard className="p-4 flex justify-between items-center sticky top-0 z-10 backdrop-blur-xl bg-white/50 dark:bg-black/50 border-white/20">
-                <div className="flex gap-4 w-full">
-                    <GlassButton
-                        onClick={() => handleSaveConfig(false)}
-                        className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white border-none shadow-lg"
-                        title={t('model_load.auto_save_tooltip')}
-                    >
-                        <Save className="w-4 h-4 mr-2" />
-                        {t('model_load.save')}
-                    </GlassButton>
-                </div>
-            </GlassCard>
 
             <ModelConfig key={`model-${resetKey}`} data={modelData} onChange={handleModelDataChange} />
             <TrainingConfig
@@ -842,12 +822,21 @@ export function ModelTrainingPage({
             <AdapterConfig key={`adapter-${resetKey}`} data={adapterData} onChange={setAdapterData} />
             <MonitoringConfig data={monitoringData} onChange={setMonitoringData} />
 
-            <GlassCard className="p-4 flex justify-end">
-                <GlassButton variant="destructive" onClick={() => setIsResetDialogOpen(true)}>
+            <div className="flex justify-end gap-3 pt-4">
+                <GlassButton variant="destructive" size="lg" onClick={() => setIsResetDialogOpen(true)}>
                     <RotateCcw className="w-4 h-4 mr-2" />
                     {t('common.reset_default')}
                 </GlassButton>
-            </GlassCard>
+                <GlassButton
+                    onClick={() => handleSaveConfig(false)}
+                    size="lg"
+                    className="pl-6 pr-8 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white border-none shadow-lg shadow-indigo-500/20"
+                    title={t('model_load.auto_save_tooltip')}
+                >
+                    <Save className="w-4 h-4 mr-2" />
+                    {t('model_load.save')}
+                </GlassButton>
+            </div>
 
             <GlassConfirmDialog
                 isOpen={isResetDialogOpen}

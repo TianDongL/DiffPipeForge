@@ -639,7 +639,11 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                             <RotateCcw className="w-4 h-4 mr-2" />
                             {t('common.reset_default')}
                         </GlassButton>
-                        <GlassButton type="submit" size="lg" className="pl-6 pr-8">
+                        <GlassButton
+                            type="submit"
+                            size="lg"
+                            className="pl-6 pr-8 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white border-none shadow-lg shadow-indigo-500/20"
+                        >
                             <Save className="w-4 h-4 mr-2" />
                             {isTraining ? t('dataset.save') : t('dataset.eval_save')}
                         </GlassButton>

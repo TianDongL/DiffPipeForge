@@ -22,7 +22,7 @@ export function WindowTitleBar() {
     return (
         <div className="h-10 w-full flex items-center justify-between bg-white/40 dark:bg-black/40 backdrop-blur-xl border-b border-white/20 dark:border-white/10 select-none z-[9999]" style={{ WebkitAppRegion: 'drag' } as any}>
             <div className="flex items-center gap-2 px-4 pointer-events-none">
-                <img src="/icon.png" alt="App Icon" className="w-5 h-5" />
+                <img src="icon.png" alt="App Icon" className="w-5 h-5" />
                 <span className="text-xs font-bold tracking-tight text-foreground/80">
                     {t('app.title') || 'DiffPipe Forge'}
                     <span className="mx-2 opacity-30">|</span>

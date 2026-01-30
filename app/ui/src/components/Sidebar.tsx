@@ -35,7 +35,7 @@ export function Sidebar({ activeTab, onTabChange, theme, onThemeToggle }: Sideba
         <aside className="w-64 h-full p-4 hidden md:flex flex-col gap-4 z-20">
             {/* Logo Area */}
             <GlassCard className="p-4 flex items-center gap-3 bg-white/80 dark:bg-black/60">
-                <img src="/icon.ico" alt="Logo" className="w-8 h-8 rounded-lg shadow-lg" />
+                <img src="icon.ico" alt="Logo" className="w-8 h-8 rounded-lg shadow-lg" />
                 <div>
                     <h2 className="font-bold text-sm tracking-wide">{t('app.title')}</h2>
                     <a

@@ -193,7 +193,7 @@ export function TrainingLogPage({ projectPath }: { projectPath?: string | null }
         <div className="flex flex-col gap-6 animate-in fade-in duration-500 h-full max-h-[calc(100vh-120px)]">
             <div className="flex items-end justify-between gap-4">
                 <div className="flex-1 min-w-0">
-                    <h2 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-violet-600 dark:from-blue-400 dark:to-violet-400">
+                    <h2 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 text-shadow-glow">
                         {t('nav.training_log')}
                     </h2>
                     <div className="flex items-center gap-3 mt-1 flex-wrap">

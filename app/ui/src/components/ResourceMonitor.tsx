@@ -105,7 +105,16 @@ export function ResourceMonitor() {
     }
 
     return (
-        <div className="space-y-4 animate-in fade-in duration-500 max-w-4xl mx-auto">
+        <div className="space-y-6 animate-in fade-in duration-500 max-w-4xl mx-auto">
+            {/* Action Header */}
+            <header className="mb-8">
+                <h2 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 text-shadow-glow">
+                    {t('nav.resource_monitor')}
+                </h2>
+                <p className="text-muted-foreground mt-1">
+                    {t('monitor.resource_desc') || 'Real-time monitoring of CPU, RAM, and GPU usage.'}
+                </p>
+            </header>
             {/* CPU Card */}
             <GlassCard className="p-6 relative overflow-hidden group hover:bg-white/5 transition-colors">
                 <div className="flex items-center gap-6">

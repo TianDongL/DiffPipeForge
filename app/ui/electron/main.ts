@@ -10,9 +10,13 @@ const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // --- Application Logging Setup ---
-const APP_ROOT_DIR = app.isPackaged ? path.dirname(process.resourcesPath) : path.resolve(__dirname, '../../..');
+const APP_ROOT_DIR = app.isPackaged ? path.dirname(app.getPath('exe')) : path.resolve(__dirname, '../../..');
 const LOG_DIR = path.join(APP_ROOT_DIR, 'logs');
 const APP_LOG_PATH = path.join(LOG_DIR, 'app.log');
+
+const resolveBackendPath = (subPath: string): string => {
+  return path.join(APP_ROOT_DIR, 'app', subPath);
+};
 
 function setupLogging() {
   try {
@@ -70,7 +74,7 @@ let win: BrowserWindow | null
 let activeBackendProcess: any = null
 let activeTensorboardProcess: any = null
 
-const SETTINGS_FILE = path.join(app.isPackaged ? path.dirname(process.resourcesPath) : path.resolve(__dirname, '../../..'), 'settings.json');
+const SETTINGS_FILE = path.join(APP_ROOT_DIR, 'settings.json');
 
 interface AppSettings {
   userPythonPath?: string;
@@ -80,6 +84,7 @@ interface AppSettings {
   tbPort?: number;
   language?: string;
   theme?: 'light' | 'dark';
+  projectLaunchParams?: Record<string, any>;
 }
 
 const loadSettings = (): AppSettings => {
@@ -230,6 +235,22 @@ app.whenReady().then(() => {
     return { success: true };
   });
 
+  ipcMain.handle('get-project-launch-params', async (_event, projectPath: string) => {
+    const settings = loadSettings();
+    if (!settings.projectLaunchParams) return {};
+    const normalized = projectPath.replace(/\\/g, '/').toLowerCase();
+    return settings.projectLaunchParams[normalized] || {};
+  });
+
+  ipcMain.handle('save-project-launch-params', async (_event, { projectPath, params }) => {
+    const settings = loadSettings();
+    if (!settings.projectLaunchParams) settings.projectLaunchParams = {};
+    const normalized = projectPath.replace(/\\/g, '/').toLowerCase();
+    settings.projectLaunchParams[normalized] = params;
+    saveSettings(settings);
+    return { success: true };
+  });
+
   let tbUrl = ''; // Cached URL for the currently active TB session
 
   // IPC Handler for TensorBoard
@@ -370,8 +391,8 @@ app.whenReady().then(() => {
       if (app.isPackaged) {
         const { projectRoot } = resolveModelsRoot();
         const pythonExe = getPythonExe(projectRoot);
-        const scriptPath = path.join(process.resourcesPath, 'backend', 'main.py');
-        const modelsDir = path.join(path.dirname(process.resourcesPath), 'models', 'index-tts', 'hub');
+        const scriptPath = resolveBackendPath('backend/main.py');
+        const modelsDir = path.join(APP_ROOT_DIR, 'models', 'index-tts', 'hub');
 
         console.log('Spawning Packaged Backend with Python:', pythonExe);
         console.log('Target Script:', scriptPath);
@@ -657,25 +678,7 @@ app.whenReady().then(() => {
         const pythonExe = getPythonExe(projectRoot);
         let scriptPath = '';
 
-        if (app.isPackaged) {
-          // In packaged app, extraFiles are placed relative to the exe directory
-          // The exe is at: win-unpacked/DiffPipeForge.exe
-          // Backend files are at: win-unpacked/app/backend/
-          const exeDir = path.dirname(app.getPath('exe'));
-          scriptPath = path.join(exeDir, 'app', 'backend', 'monitor.py');
-        } else {
-          // Try both app/backend and backend/
-          const candidates = [
-            path.join(projectRoot, 'app', 'backend', 'monitor.py'),
-            path.join(projectRoot, 'backend', 'monitor.py')
-          ];
-          for (const cand of candidates) {
-            if (fs.existsSync(cand)) {
-              scriptPath = cand;
-              break;
-            }
-          }
-        }
+        scriptPath = resolveBackendPath('backend/monitor.py');
 
         if (!fs.existsSync(scriptPath)) {
           // Try looking in root if not in backend/ (fallback)
@@ -794,7 +797,7 @@ app.whenReady().then(() => {
           // Requirements: Try looking in project root
           requirementsPath = path.join(projectRoot, 'requirements.txt');
           if (!fs.existsSync(requirementsPath)) {
-            const internalReq = path.join(process.resourcesPath, 'backend', 'requirements.txt');
+            const internalReq = resolveBackendPath('backend/requirements.txt');
             if (fs.existsSync(internalReq)) requirementsPath = internalReq;
           }
         } else {
@@ -862,10 +865,12 @@ app.whenReady().then(() => {
         if (app.isPackaged) {
           requirementsPath = path.join(projectRoot, 'requirements.txt');
           if (!fs.existsSync(requirementsPath)) {
-            const internalReq = path.join(process.resourcesPath, 'backend', 'requirements.txt');
-            if (fs.existsSync(internalReq)) requirementsPath = internalReq;
+            const internalReq = resolveBackendPath('backend/requirements.txt');
+            if (fs.existsSync(internalReq)) {
+              requirementsPath = internalReq; // Assuming reqToUse should update requirementsPath
+            }
           }
-          checkScriptPath = path.join(process.resourcesPath, 'backend', 'check_requirements.py');
+          checkScriptPath = resolveBackendPath('backend/check_requirements.py');
         } else {
           requirementsPath = path.join(projectRoot, 'requirements.txt');
           checkScriptPath = path.join(projectRoot, 'backend', 'check_requirements.py');
@@ -1007,7 +1012,7 @@ app.whenReady().then(() => {
     });
   };
 
-  const getPythonExe = (projectRoot: string): string => {
+  function getPythonExe(projectRoot: string): string {
     // 1. User selected path from settings (Highest priority)
     const settings = loadSettings();
     if (settings.userPythonPath && fs.existsSync(settings.userPythonPath)) {
@@ -1565,15 +1570,15 @@ enable_ar_bucket = true
       try {
         const {
           configPath,
-          // Optional args
-          resumeFromCheckpoint,
-          resetDataloader,
-          regenerateCache,
-          trustCache,
-          cacheOnly,
-          forceIKnow, // i_know_what_i_am_doing
-          dumpDataset,
-          resetOptimizerParams
+          // Optional parameters from launcher (mapped from snake_case to camelCase)
+          resume_from_checkpoint: resumeFromCheckpoint,
+          reset_dataloader: resetDataloader,
+          regenerate_cache: regenerateCache,
+          trust_cache: trustCache,
+          cache_only: cacheOnly,
+          i_know_what_i_am_doing: forceIKnow,
+          dump_dataset: dumpDataset,
+          reset_optimizer_params: resetOptimizerParams
         } = args;
 
         if (!configPath) {
@@ -1651,21 +1656,12 @@ enable_ar_bucket = true
 
         // Resolve Train Script
         let scriptPath = '';
-        if (app.isPackaged) {
-          scriptPath = path.join(process.resourcesPath, 'backend', 'core', 'train.py');
-        } else {
-          scriptPath = path.join(process.env.APP_ROOT, '../backend/core/train.py');
-        }
+        scriptPath = resolveBackendPath('backend/core/train.py');
 
         if (!fs.existsSync(scriptPath)) {
-          console.log(`[Training] Script not found at ${scriptPath}, checking legacy location...`);
-          // Fallback to legacy location ?? or maybe it's just in backend/train.py if my assumption was wrong
-          // But I verified it is in app/backend/core/train.py
-          // Let's try one more fallback to root?
-          if (!fs.existsSync(scriptPath)) {
-            reject(new Error(`Train script not found at ${scriptPath}`));
-            return;
-          }
+          console.error(`[Training] Script not found at ${scriptPath}`);
+          reject(new Error(`Train script not found at ${scriptPath}`));
+          return;
         }
 
         console.log(`[Training] Starting with Python: ${pythonExe}`);
@@ -2014,10 +2010,19 @@ enable_ar_bucket = true
 
   ipcMain.handle('delete-project-folder', async (_event, projectPath) => {
     try {
-      // 1. Remove from history first
+      // 1. Remove from history and settings
       const projects = loadRecentProjects();
       const filtered = projects.filter((p: any) => p.path.toLowerCase() !== projectPath.toLowerCase());
       saveRecentProjects(filtered);
+
+      const settings = loadSettings();
+      if (settings.projectLaunchParams) {
+        const normalized = projectPath.replace(/\\/g, '/').toLowerCase();
+        if (settings.projectLaunchParams[normalized]) {
+          delete settings.projectLaunchParams[normalized];
+          saveSettings(settings);
+        }
+      }
 
       // 2. Delete folder from disk
       if (fs.existsSync(projectPath)) {
@@ -2047,6 +2052,19 @@ enable_ar_bucket = true
 
       // Rename physical folder
       fs.renameSync(oldPath, newPath);
+
+      // Update settings
+      const settings = loadSettings();
+      if (settings.projectLaunchParams) {
+        const normalizedOld = oldPath.replace(/\\/g, '/').toLowerCase();
+        const normalizedNew = newPath.replace(/\\/g, '/').toLowerCase();
+        if (settings.projectLaunchParams[normalizedOld]) {
+          settings.projectLaunchParams[normalizedNew] = settings.projectLaunchParams[normalizedOld];
+          delete settings.projectLaunchParams[normalizedOld];
+          saveSettings(settings);
+          console.log(`[Rename] Migrated launch params from ${normalizedOld} to ${normalizedNew}`);
+        }
+      }
 
       // Update history
       let projects = loadRecentProjects();

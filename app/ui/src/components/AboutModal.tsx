@@ -4,6 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { Star, Github, Info, X } from 'lucide-react';
 import { useMemo } from 'react';
 import i18n from 'i18next';
+import wxImg from '../../wx.jpg';
+import zfbImg from '../../zfb.jpg';
+import qrImg from '../../qr-code.png';
 
 function parseDonationText(text: string) {
     const parts = text.split(/\[([^\]]+)\]\(([^)]+)\)/g);
@@ -11,7 +14,7 @@ function parseDonationText(text: string) {
         if (index % 3 === 0) {
             return part;
         } else if (index % 3 === 1) {
-            return null; 
+            return null;
         } else {
             const url = part;
             const text = parts[index - 1];
@@ -65,7 +68,7 @@ export function AboutModal({ isOpen, onClose }: AboutModalProps) {
 
                 <div className="p-6 space-y-8">
                     <div className="flex items-center gap-6">
-                        <img src="/icon.ico" alt="Logo" className="w-20 h-20 rounded-2xl shadow-2xl border-2 border-white/20" />
+                        <img src="icon.ico" alt="Logo" className="w-20 h-20 rounded-2xl shadow-2xl border-2 border-white/20" />
                         <div className="space-y-1">
                             <h4 className="text-2xl font-black tracking-tight text-white">DiffPipeForge</h4>
                             <div className="flex flex-col gap-1 text-sm">
@@ -104,11 +107,11 @@ export function AboutModal({ isOpen, onClose }: AboutModalProps) {
                                     {i18n.language === 'zh' ? (
                                         <div className="grid grid-cols-2 gap-4 mt-4">
                                             <div className="aspect-square bg-white/10 rounded-xl flex flex-col items-center justify-center border border-white/5 hover:bg-white/15 transition-colors group/qr cursor-pointer overflow-hidden">
-                                                <img src="/wx.jpg" alt="WeChat QR Code" className="w-full h-full object-cover" />
+                                                <img src={wxImg} alt="WeChat QR Code" className="w-full h-full object-cover" />
                                                 <span className="absolute bottom-2 text-xs text-white/60">{t('about.wechat')}</span>
                                             </div>
                                             <div className="aspect-square bg-white/10 rounded-xl flex flex-col items-center justify-center border border-white/5 hover:bg-white/15 transition-colors group/qr cursor-pointer overflow-hidden">
-                                                <img src="/zfb.jpg" alt="Alipay QR Code" className="w-full h-full object-cover" />
+                                                <img src={zfbImg} alt="Alipay QR Code" className="w-full h-full object-cover" />
                                                 <span className="absolute bottom-2 text-xs text-white/60">{t('about.alipay')}</span>
                                             </div>
                                         </div>
@@ -119,7 +122,7 @@ export function AboutModal({ isOpen, onClose }: AboutModalProps) {
                                             rel="noopener noreferrer"
                                             className="block mt-4 w-48 mx-auto aspect-square bg-white/10 rounded-xl border border-white/5 overflow-hidden hover:bg-white/15 transition-colors"
                                         >
-                                            <img src="/qr-code.png" alt="Buy Me a Coffee" className="w-full h-full object-contain" />
+                                            <img src={qrImg} alt="Buy Me a Coffee" className="w-full h-full object-contain" />
                                         </a>
                                     )}
                                 </div>

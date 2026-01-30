@@ -66,6 +66,7 @@
         "title": "TensorBoard Monitor",
         "initializing": "Initializing Monitor Service...",
         "desc": "Visualize training metrics and images",
+        "resource_desc": "Real-time monitoring of CPU, RAM, and GPU usage.",
         "host": "Host",
         "port": "Port",
         "log_dir": "Log Directory",

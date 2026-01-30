@@ -66,6 +66,7 @@
         "title": "TensorBoard 监控",
         "initializing": "正在初始化监控服务...",
         "desc": "可视化训练过程中的指标和图像",
+        "resource_desc": "实时监控 CPU、内存及 GPU 显存使用情况。",
         "host": "主机地址 Host",
         "port": "端口 Port",
         "log_dir": "日志目录 Log Directory",

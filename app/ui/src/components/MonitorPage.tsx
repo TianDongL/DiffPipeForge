@@ -203,8 +203,10 @@ export function MonitorPage({ className, initialLogDir, projectPath }: MonitorPa
             {/* ... rest of the component ... */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h2 className="text-2xl font-bold tracking-tight">{t('monitor.title')}</h2>
-                    <p className="text-muted-foreground">{t('monitor.desc')}</p>
+                    <h2 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 text-shadow-glow">
+                        {t('nav.monitor')}
+                    </h2>
+                    <p className="text-muted-foreground mt-1">{t('monitor.desc')}</p>
                 </div>
                 <div className="flex items-center gap-2">
                     {isRunning && (

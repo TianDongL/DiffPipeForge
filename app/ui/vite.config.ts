@@ -13,6 +13,7 @@ const appVersion = packageJson.version || '0.0.0';
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  base: './',
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
   },
