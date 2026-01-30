@@ -11,19 +11,19 @@
     "dist",
     "dist-electron"
   ],
-  "extraResources": [
+  "extraFiles": [
     {
       "from": "../backend",
-      "to": "backend",
+      "to": "app/backend",
       "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc", "!**/.git/**"]
     },
     {
       "from": "../backend_bridge.py",
-      "to": "backend_bridge.py"
+      "to": "app/backend_bridge.py"
     },
     {
       "from": "../requirements.txt",
-      "to": "requirements.txt"
+      "to": "app/requirements.txt"
     }
   ],
   "win": {

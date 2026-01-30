@@ -10,13 +10,20 @@ export default function App() {
     const { i18n } = useTranslation();
 
     useEffect(() => {
-        document.documentElement.classList.add('dark');
-
+        // Load language
         const savedLang = window.ipcRenderer?.invoke('get-language');
         savedLang.then((lang: string) => {
             if (lang && lang !== i18n.language) {
                 i18n.changeLanguage(lang);
             }
+        });
+
+        // Load and apply theme
+        const savedTheme = window.ipcRenderer?.invoke('get-theme');
+        savedTheme.then((theme: 'light' | 'dark') => {
+            const currentTheme = theme || 'dark';
+            document.documentElement.classList.remove('light', 'dark');
+            document.documentElement.classList.add(currentTheme);
         });
 
         // Global drag-drop handlers to fix WSL2/Network path issues and 🚫 icon

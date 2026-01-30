@@ -18,6 +18,7 @@ interface ModelTrainingPageProps {
     setGlobalModelType?: (type: string) => void;
     setGlobalModelVersion?: (version: string) => void;
     evalSets?: { name: string, path: string }[];
+    projectPath?: string | null;
 }
 
 // Default constants
@@ -76,7 +77,14 @@ const DEFAULT_MONITORING_DATA = {
     wandb_run_name: ''
 };
 
-export function ModelTrainingPage({ importedConfig, globalModelType, setGlobalModelType, setGlobalModelVersion, evalSets = [] }: ModelTrainingPageProps) {
+export function ModelTrainingPage({
+    importedConfig,
+    globalModelType,
+    setGlobalModelType,
+    setGlobalModelVersion,
+    evalSets = [],
+    projectPath
+}: ModelTrainingPageProps) {
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
     const [modelData, setModelData] = useState<any>(DEFAULT_MODEL_DATA);
@@ -218,9 +226,16 @@ export function ModelTrainingPage({ importedConfig, globalModelType, setGlobalMo
             trainKeys.forEach(key => {
                 if (importedConfig[key] !== undefined) {
                     if (key === 'output_dir') {
-                        const fullPath = String(importedConfig[key]);
-                        const segments = fullPath.split(/[/\\]/).filter(Boolean);
-                        const basename = segments.pop() || 'mylora';
+                        const fullPath = String(importedConfig[key]).replace(/\\/g, '/');
+                        const segments = fullPath.split('/').filter(Boolean);
+                        let basename = segments.pop() || 'mylora';
+
+                        // If the imported output_dir is exactly the same as the project root folder,
+                        // reset the subfolder name to 'mylora' to avoid redundant nesting (e.g. test/test)
+                        const currentPath = (projectPath || '').replace(/\\/g, '/');
+                        if (currentPath.endsWith('/' + basename) || currentPath === basename) {
+                            basename = 'mylora';
+                        }
                         tData.output_folder_name = basename;
                     } else if (key === 'activation_checkpointing') {
                         tData[key] = String(importedConfig[key]);
@@ -264,7 +279,14 @@ export function ModelTrainingPage({ importedConfig, globalModelType, setGlobalMo
     // State for auto-save debounce
     const [saveTimeout, setSaveTimeout] = useState<NodeJS.Timeout | null>(null);
     // Cached session folder (created once per session/mount to avoid new folders every save)
-    const [sessionFolder, setSessionFolder] = useState<string | null>(null);
+    const [sessionFolder, setSessionFolder] = useState<string | null>(projectPath ? projectPath.replace(/\\/g, '/') : null);
+
+    // Update sessionFolder if projectPath prop changes
+    useEffect(() => {
+        if (projectPath) {
+            setSessionFolder(projectPath.replace(/\\/g, '/'));
+        }
+    }, [projectPath]);
     // Cached actual saved paths (to ensure consistency with what was actually saved)
     const [savedPaths, setSavedPaths] = useState<{
         trainConfigPath: string | null;
@@ -274,12 +296,21 @@ export function ModelTrainingPage({ importedConfig, globalModelType, setGlobalMo
 
     // Generate timestamp folder on first access
     const getOrCreateSessionFolder = async () => {
+        // 1. Priority: Existing session folder already in state
         if (sessionFolder) return sessionFolder;
 
+        // 2. Priority: Inherited project path from Layout (e.g. if we loaded an existing project)
+        if (projectPath) {
+            const normalized = projectPath.replace(/\\/g, '/');
+            setSessionFolder(normalized);
+            return normalized;
+        }
+
+        // 3. Fallback: Generate a new timestamped folder
         const { projectRoot } = await window.ipcRenderer.invoke('get-paths');
         const now = new Date();
         const pad = (n: number) => n.toString().padStart(2, '0');
-        const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+        const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getSeconds())}`;
         const folder = `${projectRoot}/output/${timestamp}`.replace(/\\/g, '/');
         setSessionFolder(folder);
         return folder;
@@ -760,7 +791,7 @@ export function ModelTrainingPage({ importedConfig, globalModelType, setGlobalMo
 
         setSaveTimeout(timeout);
         return () => clearTimeout(timeout);
-    }, [modelData, trainingData, advancedData, optimizerData, adapterData, monitoringData, evalSets]);
+    }, [modelData, trainingData, advancedData, optimizerData, adapterData, monitoringData, evalSets, sessionFolder]);
 
 
     const handleReset = () => {

@@ -71,11 +71,20 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
         setTheme(newTheme);
         document.documentElement.classList.remove('light', 'dark');
         document.documentElement.classList.add(newTheme);
+        // @ts-ignore
+        window.ipcRenderer.invoke('set-theme', newTheme);
     };
 
-    // Initialize theme
+    // Initialize theme from settings
     useEffect(() => {
-        document.documentElement.classList.add('dark');
+        // @ts-ignore
+        window.ipcRenderer.invoke('get-theme').then((savedTheme: 'light' | 'dark') => {
+            if (savedTheme) {
+                setTheme(savedTheme);
+                document.documentElement.classList.remove('light', 'dark');
+                document.documentElement.classList.add(savedTheme);
+            }
+        });
     }, []);
 
     // Load project from path
@@ -543,6 +552,7 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
                                 setGlobalModelType={setCurrentModelType}
                                 setGlobalModelVersion={setCurrentModelVersion}
                                 evalSets={evalSets}
+                                projectPath={projectPath}
                             />
                         </div>
                         <div style={{ display: activeTab === 'training_run' ? 'block' : 'none' }}>

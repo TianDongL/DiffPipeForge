@@ -1043,6 +1043,16 @@ app.whenReady().then(() => {
     saveSettings(settings);
     return { success: true };
   });
+  ipcMain.handle("get-theme", async () => {
+    const settings = loadSettings();
+    return settings.theme || "dark";
+  });
+  ipcMain.handle("set-theme", async (_event, theme) => {
+    const settings = loadSettings();
+    settings.theme = theme;
+    saveSettings(settings);
+    return { success: true };
+  });
   let tbUrl = "";
   ipcMain.handle("start-tensorboard", async (_event, { logDir, host, port }) => {
     const settings = loadSettings();

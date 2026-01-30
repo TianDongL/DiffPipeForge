@@ -79,6 +79,7 @@ interface AppSettings {
   tbHost?: string;
   tbPort?: number;
   language?: string;
+  theme?: 'light' | 'dark';
 }
 
 const loadSettings = (): AppSettings => {
@@ -213,6 +214,18 @@ app.whenReady().then(() => {
   ipcMain.handle('set-language', async (_event, lang: string) => {
     const settings = loadSettings();
     settings.language = lang;
+    saveSettings(settings);
+    return { success: true };
+  });
+
+  ipcMain.handle('get-theme', async () => {
+    const settings = loadSettings();
+    return settings.theme || 'dark';
+  });
+
+  ipcMain.handle('set-theme', async (_event, theme: 'light' | 'dark') => {
+    const settings = loadSettings();
+    settings.theme = theme;
     saveSettings(settings);
     return { success: true };
   });
