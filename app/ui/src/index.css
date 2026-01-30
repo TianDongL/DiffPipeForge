@@ -69,6 +69,12 @@
   body {
     @apply bg-background text-foreground antialiased selection:bg-primary/20;
     font-feature-settings: "rlig" 1, "calt" 1;
+    overflow: hidden; /* Prevent body scrolling since win is frameless */
+  }
+
+  /* App Window border for frameless mode */
+  #root {
+    @apply flex flex-col h-screen w-screen border border-white/10 overflow-hidden;
   }
 
   /* Fix input underline border - prevent Tailwind preflight from overriding */

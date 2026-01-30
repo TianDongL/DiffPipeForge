@@ -959,8 +959,10 @@ function createWindow() {
       webSecurity: false
       // Allow loading local resources (file://)
     },
-    autoHideMenuBar: true
+    autoHideMenuBar: true,
     // Hide the default menu bar (File, Edit, etc.)
+    frame: false
+    // Frameless window for custom title bar
   });
   console.log("BrowserWindow created, id:", win.id);
   win.webContents.on("did-finish-load", () => {
@@ -985,6 +987,19 @@ app.on("window-all-closed", () => {
 app.whenReady().then(() => {
   console.log("App is ready, creating window...");
   createWindow();
+  ipcMain.on("window-minimize", () => {
+    win == null ? void 0 : win.minimize();
+  });
+  ipcMain.on("window-toggle-maximize", () => {
+    if (win == null ? void 0 : win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win == null ? void 0 : win.maximize();
+    }
+  });
+  ipcMain.on("window-close", () => {
+    win == null ? void 0 : win.close();
+  });
   ipcMain.handle("get-file-url", async (_event, filePath) => {
     return pathToFileURL(filePath).href;
   });

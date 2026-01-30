@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import AppLayout from './components/Layout';
 import { ProjectSelectionPage } from './components/ProjectSelectionPage';
 import { GlassToastProvider } from './components/ui/GlassToast';
+import { WindowTitleBar } from './components/ui/WindowTitleBar';
 import { useTranslation } from 'react-i18next';
 
 export default function App() {
@@ -10,7 +11,7 @@ export default function App() {
 
     useEffect(() => {
         document.documentElement.classList.add('dark');
-        
+
         const savedLang = window.ipcRenderer?.invoke('get-language');
         savedLang.then((lang: string) => {
             if (lang && lang !== i18n.language) {
@@ -32,15 +33,18 @@ export default function App() {
 
     return (
         <GlassToastProvider>
-            {currentProject ? (
-                <AppLayout
-                    onBackToHome={handleBackToHome}
-                    projectPath={currentProject}
-                    onProjectRenamed={(newPath) => setCurrentProject(newPath)}
-                />
-            ) : (
-                <ProjectSelectionPage onSelect={handleProjectSelect} />
-            )}
+            <WindowTitleBar />
+            <div className="flex-1 overflow-hidden relative flex flex-col">
+                {currentProject ? (
+                    <AppLayout
+                        onBackToHome={handleBackToHome}
+                        projectPath={currentProject}
+                        onProjectRenamed={(newPath) => setCurrentProject(newPath)}
+                    />
+                ) : (
+                    <ProjectSelectionPage onSelect={handleProjectSelect} />
+                )}
+            </div>
         </GlassToastProvider>
     );
 }

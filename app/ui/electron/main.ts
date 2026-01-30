@@ -112,6 +112,7 @@ function createWindow() {
       webSecurity: false // Allow loading local resources (file://)
     },
     autoHideMenuBar: true, // Hide the default menu bar (File, Edit, etc.)
+    frame: false, // Frameless window for custom title bar
   })
   console.log("BrowserWindow created, id:", win.id);
 
@@ -143,6 +144,23 @@ app.on('window-all-closed', () => {
 app.whenReady().then(() => {
   console.log("App is ready, creating window...");
   createWindow()
+
+  // Window controls
+  ipcMain.on('window-minimize', () => {
+    win?.minimize();
+  });
+
+  ipcMain.on('window-toggle-maximize', () => {
+    if (win?.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win?.maximize();
+    }
+  });
+
+  ipcMain.on('window-close', () => {
+    win?.close();
+  });
 
   // IPC Handler for converting path to file URL (robust encoding)
   ipcMain.handle('get-file-url', async (_event, filePath: string) => {
