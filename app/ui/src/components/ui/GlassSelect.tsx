@@ -25,12 +25,12 @@ const GlassSelect = React.forwardRef<HTMLSelectElement, GlassSelectProps>(
                 <div className="relative">
                     <select
                         className={cn(
-                            "flex h-10 w-full appearance-none rounded-t-lg border-b-2 border-t-0 border-x-0 px-3 py-2 text-sm border-solid",
+                            "flex h-10 w-full appearance-none rounded-lg border px-3 py-2 text-sm",
                             "bg-white/40 dark:bg-white/5 backdrop-blur-md",
-                            "border-gray-500 dark:border-white/60",
-                            "focus-visible:outline-none focus-visible:border-primary",
+                            "border-gray-200 dark:border-white/10",
+                            "focus-visible:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50",
                             "disabled:cursor-not-allowed disabled:opacity-50",
-                            "transition-all duration-200",
+                            "transition-all duration-200 shadow-sm hover:border-gray-300 dark:hover:border-white/20",
                             className
                         )}
                         ref={ref}

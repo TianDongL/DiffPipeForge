@@ -19,7 +19,13 @@ interface SpeedData {
     iterTime: number;
 }
 
-export function TrainingLogPage({ projectPath }: { projectPath?: string | null }) {
+interface TrainingLogViewerProps {
+    projectPath?: string | null;
+    showTitle?: boolean;
+    integrated?: boolean;
+}
+
+export function TrainingLogViewer({ projectPath, showTitle = true, integrated = false }: TrainingLogViewerProps) {
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
     const [logs, setLogs] = useState<string[]>([]);
@@ -55,7 +61,6 @@ export function TrainingLogPage({ projectPath }: { projectPath?: string | null }
         return null;
     };
 
-    // Load logs handle (File or Memory)
     const loadSessionLogs = async (sessionId: string | null) => {
         if (!sessionId || sessionId === 'current') {
             const status = await window.ipcRenderer.invoke('get-training-status');
@@ -81,20 +86,17 @@ export function TrainingLogPage({ projectPath }: { projectPath?: string | null }
         }
     };
 
-    // Main initialization and session switching
     useEffect(() => {
         if (projectPath && isFirstLoad.current) {
             fetchSessions().then(() => {
                 loadSessionLogs(selectedSessionId);
             });
             isFirstLoad.current = false;
-        } else {
-            // Just switch view, don't clear if it's the same
+        } else if (projectPath) {
             loadSessionLogs(selectedSessionId);
         }
     }, [selectedSessionId, projectPath]);
 
-    // Background session refresh (silent, doesn't wipe logs)
     useEffect(() => {
         if (!isFirstLoad.current) {
             const timer = setInterval(() => {
@@ -106,7 +108,6 @@ export function TrainingLogPage({ projectPath }: { projectPath?: string | null }
 
     useEffect(() => {
         const handleLogs = (_event: any, newLog: string) => {
-            // Only append to logs if we are looking at the "current" session
             if (selectedSessionId === 'current' || !selectedSessionId) {
                 setLogs(prev => {
                     const newLogs = [...prev, newLog];
@@ -129,9 +130,8 @@ export function TrainingLogPage({ projectPath }: { projectPath?: string | null }
             } else if (status.type === 'started') {
                 setIsTraining(true);
                 setSpeed(null);
-                setSelectedSessionId('current'); // Switch to live view immediately
-                // No setLogs([]) here, we rely on main.ts clearing queue or initial fetch
-                setTimeout(() => fetchSessions(), 7000); // Update session list for the future
+                setSelectedSessionId('current');
+                setTimeout(() => fetchSessions(), 7000);
             }
         };
 
@@ -190,65 +190,78 @@ export function TrainingLogPage({ projectPath }: { projectPath?: string | null }
     ];
 
     return (
-        <div className="flex flex-col gap-6 animate-in fade-in duration-500 h-full max-h-[calc(100vh-120px)]">
-            <div className="flex items-end justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                    <h2 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 text-shadow-glow">
-                        {t('nav.training_log')}
-                    </h2>
-                    <div className="flex items-center gap-3 mt-1 flex-wrap">
-                        <p className="text-muted-foreground whitespace-nowrap">
-                            {isTraining ? t('training_log.status_active') : t('training_log.status_inactive')}
-                        </p>
-                        <div className="flex items-center gap-2 max-w-md">
-                            <GlassSelect
-                                className="h-8 py-0 pl-2 text-xs min-w-[240px]"
-                                options={sessionOptions}
-                                value={selectedSessionId || 'current'}
-                                onChange={(e) => setSelectedSessionId(e.target.value)}
-                            />
-                        </div>
-                        {speed !== null && (
-                            <div className="px-3 py-1 rounded-xl bg-white/10 text-white border border-white/20 font-mono text-xs flex items-center gap-3 animate-in zoom-in duration-300">
-                                <div className="flex items-center gap-1.5 pt-0.5">
-                                    <Terminal size={12} className="opacity-70" />
-                                    <span>{t('training_log.speed')}: <strong>{speed.samplesPerSec.toFixed(3)}</strong> samples/sec</span>
-                                </div>
-                                <div className="w-[1px] h-3 bg-white/20" />
-                                <div className="flex items-center gap-1.5 pt-0.5">
-                                    <span>{t('training_log.iter_time')}: <strong>{speed.iterTime.toFixed(2)}</strong>s</span>
-                                </div>
-                            </div>
-                        )}
+        <div className={cn("flex flex-col gap-4", integrated ? "mt-8" : "h-full max-h-[calc(100vh-120px)]")}>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-6 flex-wrap">
+                    {showTitle && (
+                        <h2 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 text-shadow-glow">
+                            {t('nav.training_log')}
+                        </h2>
+                    )}
+                    <p className="text-muted-foreground whitespace-nowrap text-xs">
+                        {isTraining ? t('training_log.status_active') : t('training_log.status_inactive')}
+                    </p>
+                    <div className="flex items-center gap-2">
+                        <GlassSelect
+                            className="h-8 py-0 pl-2 text-xs min-w-[200px] bg-white/5 border-white/20"
+                            options={sessionOptions}
+                            value={selectedSessionId || 'current'}
+                            onChange={(e) => setSelectedSessionId(e.target.value)}
+                        />
                     </div>
+                    {speed !== null && (
+                        <div className="px-4 py-1.5 rounded-xl bg-indigo-500/10 text-indigo-100 border border-indigo-500/20 font-mono text-xs flex items-center gap-4 animate-in zoom-in duration-300 h-9 shadow-lg shadow-indigo-500/5">
+                            <div className="flex items-center gap-2">
+                                <Terminal size={13} className="text-indigo-400" />
+                                <span className="opacity-80">{t('training_log.speed')}:</span>
+                                <strong className="text-sm font-bold text-white tracking-tight">{speed.samplesPerSec.toFixed(3)}</strong>
+                            </div>
+                            <div className="w-[1px] h-4 bg-indigo-500/20" />
+                            <div className="flex items-center gap-2">
+                                <span className="opacity-80">{t('training_log.iter_time')}:</span>
+                                <strong className="text-sm font-bold text-white tracking-tight">{speed.iterTime.toFixed(2)}s</strong>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
-                <div className="flex gap-2 mb-1">
+                <div className="flex gap-2">
                     {isTraining && (
                         <GlassButton
                             className="bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white border-none shadow-lg"
                             size="sm"
                             onClick={handleStopTraining}
                         >
-                            <Square className="w-4 h-4 mr-2" />
+                            <Square className="w-3 h-3 mr-2" />
                             {t('training.stop')}
                         </GlassButton>
                     )}
-                    <GlassButton variant="outline" size="sm" onClick={downloadLogs} disabled={logs.length === 0}>
-                        <Download className="w-4 h-4 mr-2" />
+                    <GlassButton
+                        variant="outline"
+                        size="sm"
+                        onClick={downloadLogs}
+                        disabled={logs.length === 0}
+                        className="border-white/30 bg-white/5 hover:bg-white/10 hover:border-white/50 text-white/90"
+                    >
+                        <Download className="w-3 h-3 mr-2" />
                         {t('common.export')}
                     </GlassButton>
-                    <GlassButton variant="outline" size="sm" onClick={() => setLogs([])}>
-                        <XCircle className="w-4 h-4 mr-2" />
+                    <GlassButton
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setLogs([])}
+                        className="border-white/30 bg-white/5 hover:bg-white/10 hover:border-white/50 text-white/90"
+                    >
+                        <XCircle className="w-3 h-3 mr-2" />
                         {t('common.clear')}
                     </GlassButton>
                 </div>
             </div>
 
-            <GlassCard className="flex-1 p-0 overflow-hidden flex flex-col border-primary/20 bg-black/40 backdrop-blur-xl min-h-0">
-                <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/10 text-xs font-mono opacity-70">
+            <GlassCard className={cn("flex-1 p-0 overflow-hidden flex flex-col border-primary/20 bg-black/40 backdrop-blur-xl min-h-[300px]", integrated && "max-h-[500px]")}>
+                <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/10 text-[10px] font-mono opacity-70">
                     <div className="flex items-center gap-2">
-                        <Terminal className="w-3.5 h-3.5" />
+                        <Terminal className="w-3 h-3" />
                         <span>
                             {selectedSessionId === 'current' || !selectedSessionId
                                 ? `STDOUT_STREAM (${t('training_log.current_session')})`
@@ -256,34 +269,34 @@ export function TrainingLogPage({ projectPath }: { projectPath?: string | null }
                         </span>
                     </div>
                     <div className="flex items-center gap-2">
-                        <span className={cn("w-2 h-2 rounded-full", isTraining ? "bg-green-500 animate-pulse" : "bg-gray-500")} />
-                        <span className="font-mono">{isTraining ? 'LIVE' : 'IDLE'}</span>
+                        <span className={cn("w-1.5 h-1.5 rounded-full", isTraining ? "bg-green-500 animate-pulse" : "bg-gray-500")} />
+                        <span className="font-mono uppercase">{isTraining ? 'Live' : 'Idle'}</span>
                     </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 font-mono text-[13px] leading-relaxed scroll-smooth selection:bg-primary/30 custom-scrollbar">
+                <div className="flex-1 overflow-y-auto p-4 font-mono text-[12px] leading-relaxed scroll-smooth selection:bg-primary/30 custom-scrollbar">
                     {logs.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center opacity-30 gap-4">
-                            <ScrollText className="w-12 h-12" />
-                            <p className="italic text-lg">
+                        <div className="h-full flex flex-col items-center justify-center opacity-30 gap-2 py-10">
+                            <ScrollText className="w-8 h-8" />
+                            <p className="italic text-sm">
                                 {isTraining ? t('training_log.waiting') : t('training_log.no_logs')}
                             </p>
                         </div>
                     ) : (
-                        <div className="space-y-1">
+                        <div className="space-y-0.5">
                             {logs.map((log, idx) => (
                                 <div key={idx} className={cn(
-                                    "whitespace-pre-wrap break-all py-0.5 border-l-2 border-transparent hover:border-white/10 pl-3 transition-colors",
+                                    "whitespace-pre-wrap break-all py-0.5 border-l-2 border-transparent hover:border-white/10 pl-2 transition-colors",
                                     log.toLowerCase().includes('error') || log.toLowerCase().includes('exception') || log.toLowerCase().includes('traceback') ? "text-red-400 bg-red-400/5" :
                                         log.toLowerCase().includes('warning') ? "text-amber-400 bg-amber-400/5" :
                                             log.includes('[Command]:') ? "text-violet-400 font-bold" :
                                                 log.toLowerCase().includes('step') || log.toLowerCase().includes('info') ? "text-blue-300 font-bold" : "text-gray-300"
                                 )}>
-                                    <span className="inline-block w-8 text-white/20 select-none text-[10px]">{idx + 1}</span>
+                                    <span className="inline-block w-6 text-white/20 select-none text-[9px]">{idx + 1}</span>
                                     {log}
                                 </div>
                             ))}
-                            <div ref={logEndRef} className="h-4" />
+                            <div ref={logEndRef} className="h-2" />
                         </div>
                     )}
                 </div>

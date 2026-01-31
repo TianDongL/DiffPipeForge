@@ -7,6 +7,7 @@ import { useGlassToast } from './ui/GlassToast';
 import { StartParamsConfig } from './StartParamsConfig';
 import { cn } from '@/lib/utils';
 import { parse } from 'smol-toml';
+import { TrainingLogViewer } from './TrainingLogViewer';
 
 interface TrainingLauncherPageProps {
     projectPath?: string | null;
@@ -249,6 +250,9 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
                     <StartParamsConfig data={startParams} onChange={setStartParams} />
                 </div>
             </div>
+
+            {/* Integrated Training Logs */}
+            <TrainingLogViewer projectPath={projectPath} showTitle={true} integrated={true} />
         </div>
     );
 }

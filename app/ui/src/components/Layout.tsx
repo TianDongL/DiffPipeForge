@@ -4,7 +4,6 @@ import { DatasetConfig } from './DatasetConfig';
 import { ModelTrainingPage } from "./ModelTrainingPage";
 import { MonitorPage } from './MonitorPage';
 import { ResourceMonitor } from './ResourceMonitor';
-import { TrainingLogPage } from './TrainingLogPage';
 import { TrainingLauncherPage } from './TrainingLauncherPage';
 import { GlassConfirmDialog } from "./ui/GlassConfirmDialog";
 import { Home, CheckCircle2, UploadCloud, AlertTriangle, FolderOpen, ChevronDown } from 'lucide-react';
@@ -13,7 +12,7 @@ import { useTranslation } from "react-i18next";
 import { useGlassToast } from "./ui/GlassToast";
 import { parse } from "smol-toml";
 
-export type NavItem = 'dataset' | 'eval_dataset' | 'training_setup' | 'training_run' | 'monitor' | 'resource_monitor' | 'training_log';
+export type NavItem = 'dataset' | 'eval_dataset' | 'training_setup' | 'training_run' | 'monitor' | 'resource_monitor';
 
 // Garbage removed
 
@@ -570,9 +569,6 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
                         </div>
                         <div style={{ display: activeTab === 'resource_monitor' ? 'block' : 'none' }}>
                             {activeTab === 'resource_monitor' && <ResourceMonitor />}
-                        </div>
-                        <div style={{ display: activeTab === 'training_log' ? 'block' : 'none' }}>
-                            {activeTab === 'training_log' && <TrainingLogPage projectPath={projectPath} />}
                         </div>
 
                         {/* Dialogs */}

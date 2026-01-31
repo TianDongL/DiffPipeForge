@@ -32,13 +32,13 @@ const GlassInput = React.forwardRef<HTMLInputElement, InputProps>(
                 <input
                     type={type}
                     className={cn(
-                        "block w-full appearance-none rounded-t-lg border-b-2 border-t-0 border-x-0 px-3 py-2.5 text-sm border-solid",
+                        "block w-full appearance-none rounded-lg border px-3 py-2.5 text-sm",
                         "bg-white/40 dark:bg-white/5 backdrop-blur-md",
-                        "border-gray-500 dark:border-white/60",
-                        "placeholder:text-gray-500 dark:placeholder:text-gray-400",
-                        "focus-visible:outline-none focus:border-primary focus:border-b-2 focus:ring-0",
+                        "border-gray-200 dark:border-white/10",
+                        "placeholder:text-gray-400 dark:placeholder:text-gray-500",
+                        "focus-visible:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50",
                         "disabled:cursor-not-allowed disabled:opacity-50",
-                        "transition-all duration-200",
+                        "transition-all duration-200 shadow-sm hover:border-gray-300 dark:hover:border-white/20",
                         className
                     )}
                     ref={ref}
