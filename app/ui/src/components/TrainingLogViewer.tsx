@@ -258,7 +258,7 @@ export function TrainingLogViewer({ projectPath, showTitle = true, integrated = 
                 </div>
             </div>
 
-            <GlassCard className={cn("flex-1 p-0 overflow-hidden flex flex-col border-primary/20 bg-black/40 backdrop-blur-xl min-h-[300px]", integrated && "max-h-[500px]")}>
+            <GlassCard className={cn("flex-1 p-0 overflow-hidden flex flex-col border-primary/20 bg-black/40 backdrop-blur-xl min-h-[500px]", integrated && "max-h-[800px]")}>
                 <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/10 text-[10px] font-mono opacity-70">
                     <div className="flex items-center gap-2">
                         <Terminal className="w-3 h-3" />
