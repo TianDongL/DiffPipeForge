@@ -1020,28 +1020,32 @@ app.whenReady().then(() => {
       return settings.userPythonPath;
     }
 
-    // 2. Check for Conda environment (Matches start.py method 1)
+    // Helper to check standard locations
+    const isWin = process.platform === 'win32';
+    const getSubPath = (base: string) => isWin ? path.join(base, 'Scripts', 'python.exe') : path.join(base, 'bin', 'python');
+
+    // 2. Check for Conda environment
     if (process.env.CONDA_PREFIX) {
-      const condaPython = path.join(process.env.CONDA_PREFIX, 'python.exe');
+      const condaPython = getSubPath(process.env.CONDA_PREFIX);
       if (fs.existsSync(condaPython)) {
         console.log(`[PythonLookup] Detected Conda environment: ${process.env.CONDA_DEFAULT_ENV}`);
         return condaPython;
       }
     }
 
-    // 3. Check for Virtual Environment (Matches start.py method 2)
+    // 3. Check for Virtual Environment
     if (process.env.VIRTUAL_ENV) {
-      const venvPython = path.join(process.env.VIRTUAL_ENV, 'Scripts', 'python.exe');
+      const venvPython = getSubPath(process.env.VIRTUAL_ENV);
       if (fs.existsSync(venvPython)) {
         console.log(`[PythonLookup] Detected Virtual Env: ${process.env.VIRTUAL_ENV}`);
         return venvPython;
       }
     }
 
-    // 4. Try embedded_DP in project root or parent (Matches start.py priority)
+    // 4. Try embedded_DP in project root or parent
     const searchDirs = [projectRoot, path.dirname(projectRoot)];
     for (const dir of searchDirs) {
-      const embeddedDP = path.join(dir, 'python_embeded_DP', 'python.exe');
+      const embeddedDP = isWin ? path.join(dir, 'python_embeded_DP', 'python.exe') : path.join(dir, 'python_embeded_DP', 'bin', 'python');
       if (fs.existsSync(embeddedDP)) {
         console.log(`[PythonLookup] Found embedded_DP in ${dir}: ${embeddedDP}`);
         return embeddedDP;
@@ -1049,7 +1053,7 @@ app.whenReady().then(() => {
     }
 
     // 5. Try standard local python folder
-    const localPython = path.join(projectRoot, 'python', 'python.exe');
+    const localPython = isWin ? path.join(projectRoot, 'python', 'python.exe') : path.join(projectRoot, 'python', 'bin', 'python');
     if (fs.existsSync(localPython)) {
       console.log(`[PythonLookup] Found local python: ${localPython}`);
       return localPython;
@@ -1057,13 +1061,12 @@ app.whenReady().then(() => {
 
     // 6. Packaged specific locations
     if (app.isPackaged) {
-      const resourcesPython = path.join(process.resourcesPath, 'python', 'python.exe');
+      const resourcesPython = isWin ? path.join(process.resourcesPath, 'python', 'python.exe') : path.join(process.resourcesPath, 'python', 'bin', 'python');
       if (fs.existsSync(resourcesPython)) return resourcesPython;
     }
 
-    return 'python';
-  };
-
+    return isWin ? 'python' : 'python3';
+  }
   // IPC to get current python info and list of available ones
   ipcMain.handle('get-python-status', async () => {
     const { projectRoot } = resolveModelsRoot();
@@ -1656,7 +1659,8 @@ enable_ar_bucket = true
 
         // Resolve Train Script
         let scriptPath = '';
-        scriptPath = resolveBackendPath('backend/core/train.py');
+        const isLinux = process.platform === 'linux';
+        scriptPath = resolveBackendPath(isLinux ? 'backend/core_linux/train.py' : 'backend/core/train.py');
 
         if (!fs.existsSync(scriptPath)) {
           console.error(`[Training] Script not found at ${scriptPath}`);
@@ -1686,10 +1690,23 @@ enable_ar_bucket = true
           pythonArgs.push('--dump_dataset', dumpDataset.trim());
         }
 
+        // Platform specific executable and final arguments
+        let spawnExe = pythonExe;
+        let spawnArgs = pythonArgs;
+
+        if (isLinux) {
+          // Linux uses standard deepspeed launcher if not on Windows
+          const binDir = path.dirname(pythonExe);
+          const deepspeedPath = path.join(binDir, 'deepspeed');
+          spawnExe = fs.existsSync(deepspeedPath) ? deepspeedPath : 'deepspeed';
+          spawnArgs = ['--num_gpus=1', ...pythonArgs];
+          console.log(`[Training] [Linux] Using deepspeed launcher: ${spawnExe}`);
+        }
+
         const timestamp = new Date().toLocaleString();
         const quoteIfSpace = (s: string) => s.includes(' ') ? `"${s}"` : s;
-        const normalizedExe = pythonExe.replace(/\\/g, '/');
-        const normalizedArgs = pythonArgs.map(arg => {
+        const normalizedExe = spawnExe.replace(/\\/g, '/');
+        const normalizedArgs = spawnArgs.map(arg => {
           // Force forward slashes for paths in the log display
           if (arg.includes('/') || arg.includes('\\')) {
             return quoteIfSpace(arg.replace(/\\/g, '/'));
@@ -1717,7 +1734,7 @@ enable_ar_bucket = true
 
         const cwd = path.dirname(scriptPath);
 
-        trainingProcess = spawn(pythonExe, pythonArgs, {
+        trainingProcess = spawn(spawnExe, spawnArgs, {
           cwd: cwd,
           env: {
             ...process.env,
