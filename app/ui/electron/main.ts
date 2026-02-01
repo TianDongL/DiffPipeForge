@@ -216,6 +216,8 @@ app.whenReady().then(() => {
     return settings.language || 'zh';
   });
 
+  ipcMain.handle('get-platform', () => process.platform);
+
   ipcMain.handle('set-language', async (_event, lang: string) => {
     const settings = loadSettings();
     settings.language = lang;
@@ -1581,7 +1583,8 @@ enable_ar_bucket = true
           cache_only: cacheOnly,
           i_know_what_i_am_doing: forceIKnow,
           dump_dataset: dumpDataset,
-          reset_optimizer_params: resetOptimizerParams
+          reset_optimizer_params: resetOptimizerParams,
+          num_gpus: numGpus
         } = args;
 
         if (!configPath) {
@@ -1699,7 +1702,7 @@ enable_ar_bucket = true
           const binDir = path.dirname(pythonExe);
           const deepspeedPath = path.join(binDir, 'deepspeed');
           spawnExe = fs.existsSync(deepspeedPath) ? deepspeedPath : 'deepspeed';
-          spawnArgs = ['--num_gpus=1', ...pythonArgs];
+          spawnArgs = [`--num_gpus=${numGpus || 1}`, ...pythonArgs];
           console.log(`[Training] [Linux] Using deepspeed launcher: ${spawnExe}`);
         }
 

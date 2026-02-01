@@ -1,6 +1,7 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
 import { ChevronDown } from 'lucide-react';
+import { HelpIcon } from './HelpIcon';
 
 export interface SelectOption {
     label: string;
@@ -11,16 +12,20 @@ export interface GlassSelectProps extends React.SelectHTMLAttributes<HTMLSelectE
     label?: string;
     options: SelectOption[];
     error?: string;
+    helpText?: string;
 }
 
 const GlassSelect = React.forwardRef<HTMLSelectElement, GlassSelectProps>(
-    ({ className, label, options, error, ...props }, ref) => {
+    ({ className, label, options, error, helpText, ...props }, ref) => {
         return (
             <div className="w-full space-y-2">
                 {label && (
-                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-gray-700 dark:text-gray-300">
-                        {label}
-                    </label>
+                    <div className="flex items-center gap-1.5">
+                        <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-gray-700 dark:text-gray-300">
+                            {label}
+                        </label>
+                        {helpText && <HelpIcon text={helpText} />}
+                    </div>
                 )}
                 <div className="relative">
                     <select

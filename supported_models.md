@@ -1,3 +1,31 @@
+# Summary
+| Model          | LoRA | Full Fine Tune | fp8/quantization |
+|----------------|------|----------------|------------------|
+|SDXL            |✅    |✅              |❌                |
+|Flux            |✅    |✅              |✅                |
+|LTX-Video       |✅    |❌              |❌                |
+|HunyuanVideo    |✅    |❌              |✅                |
+|Cosmos          |✅    |❌              |❌                |
+|Lumina Image 2.0|✅    |✅              |❌                |
+|Wan2.1          |✅    |✅              |✅                |
+|Chroma          |✅    |✅              |✅                |
+|HiDream         |✅    |❌              |✅                |
+|SD3             |✅    |❌              |✅                |
+|Cosmos-Predict2 |✅    |✅              |✅                |
+|OmniGen2        |✅    |❌              |❌                |
+|Flux Kontext    |✅    |✅              |✅                |
+|Wan2.2          |✅    |✅              |✅                |
+|Qwen-Image      |✅    |✅              |✅                |
+|Qwen-Image-Edit |✅    |✅              |✅                |
+|Qwen-Image-Edit-2509 |✅    |✅              |✅                |
+|HunyuanImage-2.1|✅    |✅              |✅                |
+|AuraFlow        |✅    |❌              |✅                |
+|Z-Image         |✅    |✅              |❌                |
+|HunyuanVideo-1.5|✅    |✅              |✅                |
+|Qwen-Image-Edit-2511 |✅    |✅              |✅                |
+|Qwen-Image-Edit-2512 |✅    |✅              |✅                |
+|Flux 2（both dev and klein）          |✅    |✅              |✅                |
+
 
 ## SDXL
 ```

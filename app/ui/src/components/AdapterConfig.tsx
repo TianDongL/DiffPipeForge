@@ -79,9 +79,10 @@ export function AdapterConfig({ data, onChange }: AdapterConfigProps) {
                     onChange={handleChange}
                     options={adapterOptions}
                 />
-                <GlassInput label={t('adapter.rank')} name="rank" type="number" value={data.rank ?? 32} onChange={handleChange} />
+                <GlassInput label={t('adapter.rank')} helpText={t('help.rank')} name="rank" type="number" value={data.rank ?? 32} onChange={handleChange} />
                 <GlassSelect
                     label={t('adapter.dtype')}
+                    helpText={t('help.dtype')}
                     name="dtype"
                     value={data.dtype ?? 'bfloat16'}
                     onChange={handleChange}

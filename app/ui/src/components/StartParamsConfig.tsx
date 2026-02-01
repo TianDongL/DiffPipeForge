@@ -1,6 +1,7 @@
 import React from 'react';
 import { GlassCard } from './ui/GlassCard';
 import { GlassInput } from './ui/GlassInput';
+import { HelpIcon } from './ui/HelpIcon';
 import { useTranslation } from 'react-i18next';
 import { FolderOpen } from 'lucide-react';
 
@@ -11,6 +12,20 @@ export interface StartParamsConfigProps {
 
 export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
     const { t } = useTranslation();
+    const [platform, setPlatform] = React.useState<string>('');
+
+    React.useEffect(() => {
+        const fetchPlatform = async () => {
+            try {
+                // @ts-ignore
+                const p = await window.ipcRenderer.invoke('get-platform');
+                setPlatform(p);
+            } catch (e) {
+                console.error("Failed to fetch platform:", e);
+            }
+        };
+        fetchPlatform();
+    }, []);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
@@ -33,10 +48,11 @@ export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
         }
     };
 
-    const PathInput = ({ label, name, placeholder, isFolder = false, className }: { label: string, name: string, placeholder?: string, isFolder?: boolean, className?: string }) => (
+    const PathInput = ({ label, helpText, name, placeholder, isFolder = false, className }: { label: string, helpText?: string, name: string, placeholder?: string, isFolder?: boolean, className?: string }) => (
         <div className={`relative ${className}`}>
             <GlassInput
                 label={label}
+                helpText={helpText}
                 name={name}
                 value={data[name] ?? ''}
                 onChange={handleChange}
@@ -63,6 +79,7 @@ export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
             <div className="grid gap-6 md:grid-cols-2">
                 <PathInput
                     label={t('start_params.resume_from_checkpoint')}
+                    helpText={t('help.resume_from_checkpoint')}
                     name="resume_from_checkpoint"
                     placeholder="C:\ComfyUI\20260127_18-57-41\global_step900"
                     isFolder={true}
@@ -79,12 +96,18 @@ export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
 
                 <div className="flex flex-col gap-4">
                     <div className="flex items-center gap-2">
-                        <input type="checkbox" name="regenerate_cache" className="w-4 h-4" checked={!!data.regenerate_cache} onChange={handleChange} />
-                        <label className="text-sm">{t('start_params.regenerate_cache')}</label>
+                        <input type="checkbox" name="regenerate_cache" id="regenerate_cache" className="w-4 h-4" checked={!!data.regenerate_cache} onChange={handleChange} />
+                        <label htmlFor="regenerate_cache" className="text-sm flex items-center gap-1 cursor-pointer">
+                            {t('start_params.regenerate_cache')}
+                            <HelpIcon text={t('help.regenerate_cache')} />
+                        </label>
                     </div>
                     <div className="flex items-center gap-2">
-                        <input type="checkbox" name="trust_cache" className="w-4 h-4" checked={!!data.trust_cache} onChange={handleChange} />
-                        <label className="text-sm">{t('start_params.trust_cache')}</label>
+                        <input type="checkbox" name="trust_cache" id="trust_cache" className="w-4 h-4" checked={!!data.trust_cache} onChange={handleChange} />
+                        <label htmlFor="trust_cache" className="text-sm flex items-center gap-1 cursor-pointer">
+                            {t('start_params.trust_cache')}
+                            <HelpIcon text={t('help.trust_cache')} />
+                        </label>
                     </div>
                     <div className="flex items-center gap-2">
                         <input type="checkbox" name="cache_only" className="w-4 h-4" checked={!!data.cache_only} onChange={handleChange} />
@@ -105,6 +128,20 @@ export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
                         <input type="checkbox" name="i_know_what_i_am_doing" className="w-4 h-4" checked={!!data.i_know_what_i_am_doing} onChange={handleChange} />
                         <label className="text-sm text-red-400 font-medium">{t('start_params.i_know_what_i_am_doing')}</label>
                     </div>
+
+                    {platform !== 'win32' && (
+                        <div className="mt-2">
+                            <GlassInput
+                                label={t('start_params.num_gpus')}
+                                helpText={t('help.num_gpus')}
+                                name="num_gpus"
+                                type="number"
+                                min={1}
+                                value={data.num_gpus ?? 1}
+                                onChange={handleChange}
+                            />
+                        </div>
+                    )}
                 </div>
             </div>
         </GlassCard>

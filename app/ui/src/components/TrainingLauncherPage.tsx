@@ -25,7 +25,8 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
         reset_dataloader: false,
         reset_optimizer_params: false,
         i_know_what_i_am_doing: false,
-        dump_dataset: ''
+        dump_dataset: '',
+        num_gpus: 1
     });
     const [isLoaded, setIsLoaded] = useState(false);
     const [configSummary, setConfigSummary] = useState<{
@@ -77,7 +78,8 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
                         reset_dataloader: false,
                         reset_optimizer_params: false,
                         i_know_what_i_am_doing: false,
-                        dump_dataset: ''
+                        dump_dataset: '',
+                        num_gpus: 1
                     });
                 }
                 setIsLoaded(true);

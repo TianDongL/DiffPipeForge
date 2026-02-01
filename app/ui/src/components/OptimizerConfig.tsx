@@ -3,6 +3,7 @@ import { GlassCard } from './ui/GlassCard';
 import { GlassInput } from './ui/GlassInput';
 import { GlassSelect } from './ui/GlassSelect';
 import { useTranslation } from 'react-i18next';
+import { HelpIcon } from './ui/HelpIcon';
 
 export interface OptimizerConfigProps {
     data: any;
@@ -57,6 +58,7 @@ export function OptimizerConfig({ data, onChange }: OptimizerConfigProps) {
                     <>
                         <GlassInput
                             label={t('optimizer.lr')}
+                            helpText={t('help.lr')}
                             name="lr"
                             type="text"
                             value={data.optimizer_type === 'Prodigy' ? '1' : (data.lr ?? '2e-5')}
@@ -69,6 +71,7 @@ export function OptimizerConfig({ data, onChange }: OptimizerConfigProps) {
 
                 <GlassInput
                     label={t('optimizer.weight_decay')}
+                    helpText={t('help.weight_decay')}
                     name="weight_decay"
                     type="text"
                     value={data.weight_decay ?? '0.01'}
@@ -79,6 +82,7 @@ export function OptimizerConfig({ data, onChange }: OptimizerConfigProps) {
                     <>
                         <GlassInput
                             label={t('optimizer.beta1')}
+                            helpText={t('help.beta1')}
                             name="beta1"
                             type="text"
                             value={data.beta1 ?? '0.9'}
@@ -86,6 +90,7 @@ export function OptimizerConfig({ data, onChange }: OptimizerConfigProps) {
                         />
                         <GlassInput
                             label={t('optimizer.beta2')}
+                            helpText={t('help.beta2')}
                             name="beta2"
                             type="text"
                             value={data.beta2 ?? '0.99'}
@@ -93,6 +98,7 @@ export function OptimizerConfig({ data, onChange }: OptimizerConfigProps) {
                         />
                         <GlassInput
                             label={t('optimizer.eps')}
+                            helpText={t('help.eps')}
                             name="eps"
                             type="text"
                             value={data.eps ?? '1e-8'}
@@ -106,11 +112,15 @@ export function OptimizerConfig({ data, onChange }: OptimizerConfigProps) {
                         <input
                             type="checkbox"
                             name="stabilize"
+                            id="stabilize"
                             className="w-4 h-4"
                             checked={!!data.stabilize}
                             onChange={handleChange}
                         />
-                        <label className="text-sm">{t('optimizer.stabilize')}</label>
+                        <label htmlFor="stabilize" className="text-sm flex items-center gap-1 cursor-pointer">
+                            {t('optimizer.stabilize')}
+                            <HelpIcon text={t('help.stabilize')} />
+                        </label>
                     </div>
                 )}
             </div>

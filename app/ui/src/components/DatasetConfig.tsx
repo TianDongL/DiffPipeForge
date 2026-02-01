@@ -554,6 +554,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
                         <GlassInput
                             label={t('dataset.resolutions')}
+                            helpText={t('help.resolutions')}
                             name="resolutions"
                             value={formData.resolutions}
                             onChange={handleChange}
@@ -563,6 +564,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
                         <GlassSelect
                             label={t('dataset.enable_ar_bucket')}
+                            helpText={t('help.enable_ar_bucket')}
                             name="enable_ar_bucket"
                             value={formData.enable_ar_bucket}
                             onChange={handleChange}
@@ -575,6 +577,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
                         <GlassInput
                             label={t('dataset.min_ar')}
+                            helpText={t('help.min_ar')}
                             name="min_ar"
                             value={formData.min_ar}
                             onChange={handleChange}
@@ -584,6 +587,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
                         <GlassInput
                             label={t('dataset.max_ar')}
+                            helpText={t('help.max_ar')}
                             name="max_ar"
                             value={formData.max_ar}
                             onChange={handleChange}
@@ -593,6 +597,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
                         <GlassInput
                             label={t('dataset.num_ar_buckets')}
+                            helpText={t('help.num_ar_buckets')}
                             name="num_ar_buckets"
                             type="number"
                             value={formData.num_ar_buckets}
@@ -602,6 +607,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
                         <GlassInput
                             label={t('dataset.num_repeats')}
+                            helpText={t('help.num_repeats')}
                             name="num_repeats"
                             type="number"
                             value={formData.num_repeats}
@@ -615,6 +621,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                         <div className="grid gap-4 md:grid-cols-2">
                             <GlassInput
                                 label={t('dataset.custom_ar_buckets')}
+                                helpText={t('help.ar_buckets')}
                                 name="ar_buckets"
                                 value={formData.ar_buckets}
                                 onChange={handleChange}
@@ -624,6 +631,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                             {isVideoModel && (
                                 <GlassInput
                                     label={t('dataset.frame_buckets')}
+                                    helpText={t('help.frame_buckets')}
                                     name="frame_buckets"
                                     value={formData.frame_buckets}
                                     onChange={handleChange}

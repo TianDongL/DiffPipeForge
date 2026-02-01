@@ -1,6 +1,7 @@
 import React from 'react';
 import { GlassCard } from './ui/GlassCard';
 import { GlassInput } from './ui/GlassInput';
+import { HelpIcon } from './ui/HelpIcon';
 // import { GlassSelect } from './ui/GlassSelect'; // Not needed yet
 import { useTranslation } from 'react-i18next';
 
@@ -28,11 +29,15 @@ export function MonitoringConfig({ data, onChange }: MonitoringConfigProps) {
                 <input
                     type="checkbox"
                     name="enable_wandb"
+                    id="enable_wandb"
                     className="w-4 h-4"
                     checked={!!data.enable_wandb}
                     onChange={handleChange}
                 />
-                <label className="text-sm font-medium">{t('monitoring.enable_wandb')}</label>
+                <label htmlFor="enable_wandb" className="text-sm font-medium flex items-center gap-1 cursor-pointer">
+                    {t('monitoring.enable_wandb')}
+                    <HelpIcon text={t('help.enable_wandb')} />
+                </label>
             </div>
 
             {data.enable_wandb && (
