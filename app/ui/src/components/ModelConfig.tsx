@@ -522,7 +522,6 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
 
                         {/* Fields based on variant */}
                         {/* Fields based on variant */}
-                        <PathInput label={t('model.model_config_path')} helpText={t('help.model_config_path')} name="model_config_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder={t('common.optional')} />
                         <PathInput label={t('model.diffusers_path')} helpText={t('help.diffusers_path')} name="diffusers_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')}
                             placeholder={
                                 qwenVariant === 'qwen_2511' ? 'Qwen-Image-Edit-2511' :
