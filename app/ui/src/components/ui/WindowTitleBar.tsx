@@ -30,29 +30,32 @@ export function WindowTitleBar() {
                 </span>
             </div>
 
-            <div className="flex items-center h-full" style={{ WebkitAppRegion: 'no-drag' } as any}>
-                <button
-                    onClick={handleMinimize}
-                    className="h-full px-4 hover:bg-black/5 dark:hover:bg-white/5 transition-colors group"
-                    title={t('window.minimize') || 'Minimize'}
-                >
-                    <Minus className="w-3.5 h-3.5 text-foreground/60 group-hover:text-foreground" />
-                </button>
-                <button
-                    onClick={handleMaximize}
-                    className="h-full px-4 hover:bg-black/5 dark:hover:bg-white/5 transition-colors group"
-                    title={t('window.maximize') || 'Maximize'}
-                >
-                    <Square className="w-3 h-3 text-foreground/60 group-hover:text-foreground" />
-                </button>
-                <button
-                    onClick={handleClose}
-                    className="h-full px-4 hover:bg-red-500/80 transition-colors group"
-                    title={t('window.close') || 'Close'}
-                >
-                    <X className="w-4 h-4 text-foreground/60 group-hover:text-white" />
-                </button>
-            </div>
+            {window.ipcRenderer && (
+                <div className="flex items-center h-full" style={{ WebkitAppRegion: 'no-drag' } as any}>
+                    <button
+                        onClick={handleMinimize}
+                        className="h-full px-4 hover:bg-black/5 dark:hover:bg-white/5 transition-colors group"
+                        title={t('window.minimize') || 'Minimize'}
+                    >
+                        <Minus className="w-3.5 h-3.5 text-foreground/60 group-hover:text-foreground" />
+                    </button>
+                    <button
+                        onClick={handleMaximize}
+                        className="h-full px-4 hover:bg-black/5 dark:hover:bg-white/5 transition-colors group"
+                        title={t('window.maximize') || 'Maximize'}
+                    >
+                        <Square className="w-3 h-3 text-foreground/60 group-hover:text-foreground" />
+                    </button>
+                    <button
+                        onClick={handleClose}
+                        className="h-full px-4 hover:bg-red-500/80 transition-colors group"
+                        title={t('window.close') || 'Close'}
+                    >
+                        <X className="w-4 h-4 text-foreground/60 group-hover:text-white" />
+                    </button>
+                </div>
+            )}
+
         </div>
     );
 }

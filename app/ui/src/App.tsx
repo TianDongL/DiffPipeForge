@@ -5,7 +5,34 @@ import { GlassToastProvider } from './components/ui/GlassToast';
 import { WindowTitleBar } from './components/ui/WindowTitleBar';
 import { useTranslation } from 'react-i18next';
 
+// Web Fallback for Cloud/Browser mode
+if (typeof window !== 'undefined' && !window.ipcRenderer) {
+    (window as any).ipcRenderer = {
+        invoke: async (channel: string, ...args: any[]) => {
+            console.log(`[WebBridge] Invoking ${channel}`, args);
+            try {
+                const response = await fetch(`http://${window.location.hostname}:5001/ipc`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel, args })
+                });
+                return await response.json();
+            } catch (e) {
+                console.error(`[WebBridge] Failed to invoke ${channel}:`, e);
+                return null;
+            }
+        },
+        on: (channel: string, _callback: any) => {
+            console.warn(`[WebBridge] 'on' is not fully supported in browser mode: ${channel}`);
+        },
+        send: (channel: string, ...args: any[]) => {
+            console.log(`[WebBridge] Sending ${channel}`, args);
+        }
+    };
+}
+
 export default function App() {
+
     const [currentProject, setCurrentProject] = useState<string | null>(null);
     const { i18n } = useTranslation();
 
