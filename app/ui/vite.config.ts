@@ -17,6 +17,15 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
   },
+  server: {
+    proxy: {
+      '/ipc': {
+        target: 'http://127.0.0.1:5001',
+        changeOrigin: true,
+      }
+    }
+  },
+
   plugins: [
     react(),
     !process.env.VITE_WEB_ONLY && electron({

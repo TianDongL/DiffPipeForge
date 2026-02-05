@@ -31,6 +31,8 @@ fi
 
 export PATH="$DIR/python/bin:$PATH"
 
+export VITE_WEB_ONLY=1
+
 mkdir -p "$DIR/logs"
 
 echo -e "${GREEN}[INFO] 正在启动 Python IPC 桥接服务 (Port 5001)...${NC}"
@@ -39,7 +41,6 @@ BRIDGE_PID=$!
 
 trap "kill $BRIDGE_PID 2>/dev/null" EXIT
 
-# 告诉 Vite 只运行 Web，不要启动 Electron 窗口
 export VITE_WEB_ONLY=1
 
 echo -e "${GREEN}[INFO] 检查 Node.js 环境...${NC}"

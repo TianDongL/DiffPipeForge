@@ -11,15 +11,22 @@ if (typeof window !== 'undefined' && !window.ipcRenderer) {
         invoke: async (channel: string, ...args: any[]) => {
             console.log(`[WebBridge] Invoking ${channel}`, args);
             try {
-                const response = await fetch(`http://${window.location.hostname}:5001/ipc`, {
+                // Use relative path to take advantage of Vite proxy
+                const response = await fetch('/ipc', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ channel, args })
                 });
-                return await response.json();
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                return data;
             } catch (e) {
                 console.error(`[WebBridge] Failed to invoke ${channel}:`, e);
-                return null;
+                // Return defaults to prevent component crashes
+                if (channel === 'get-recent-projects') return [];
+                if (channel === 'get-language') return 'zh';
+                if (channel === 'get-theme') return 'dark';
+                return {};
             }
         },
         on: (channel: string, _callback: any) => {
@@ -30,6 +37,7 @@ if (typeof window !== 'undefined' && !window.ipcRenderer) {
         }
     };
 }
+
 
 export default function App() {
 
