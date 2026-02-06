@@ -18,6 +18,11 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
   },
   server: {
+    // 允许所有主机访问（开发环境）
+    allowedHosts: true,
+    // 监听所有网络接口
+    host: true,
+
     proxy: {
       '/ipc': {
         target: 'http://127.0.0.1:5001',
