@@ -357,8 +357,77 @@ class IPCHandler(http.server.BaseHTTPRequestHandler):
             return {"isRunning": is_running, "scriptName": "gemini_concurrent_tagging.py" if is_running else ""}
 
         elif channel == 'get-tool-logs':
-            # global TOOL_LOGS <- Removed
             return TOOL_LOGS
+
+        # --- Resource Monitor Handlers ---
+        elif channel == 'start-resource-monitor':
+            # In a real implementation, start a background thread collecting stats
+            return {"success": True}
+
+        elif channel == 'get-resource-monitor-stats':
+            # Mock stats for web mode
+            # In real cloud mode, this should read actual system stats if permitted
+            return {
+                "cpu_model": "Cloud CPU",
+                "cpu_percent": 15.5,
+                "memory": {
+                    "total": 16 * 1024 * 1024 * 1024,
+                    "available": 8 * 1024 * 1024 * 1024,
+                    "percent": 50.0,
+                    "used": 8 * 1024 * 1024 * 1024
+                },
+                "disks": [],
+                "gpus": [], # GPU stats might need nvml, skip for now
+                "timestamp": datetime.datetime.now().timestamp()
+            }
+
+        # --- System Diagnostics Handlers ---
+        elif channel == 'calculate-python-fingerprint':
+            # Mock fingerprint calc
+            return {
+                "totalFiles": 1000,
+                "totalSize": 102400,
+                "totalSizeFormatted": "100 MB",
+                "sha256": "mock_sha256_hash_for_cloud_mode"
+            }
+
+        elif channel == 'get-fingerprint-cache':
+            return {
+                "totalFiles": 1000,
+                "totalSize": 102400,
+                "totalSizeFormatted": "100 MB",
+                "sha256": "mock_sha256_hash_for_cloud_mode",
+                "calculatedAt": datetime.datetime.now().isoformat()
+            }
+
+        elif channel == 'get-official-fingerprint':
+             return {
+                "sha256": "mock_sha256_hash_for_cloud_mode",
+                "totalFiles": 1000,
+                "version": "1.0.0",
+                "generatedAt": datetime.datetime.now().isoformat()
+             }
+        
+        elif channel == 'save-fingerprint-cache':
+            # efficient no-op or save to settings
+            return {"success": True}
+
+        # --- Training Launcher Handlers ---
+        elif channel == 'get-training-status':
+             return {"running": False, "message": "Ready"}
+        
+        elif channel == 'start-training':
+             return {"success": True, "message": "Training started (Mock)"}
+        
+        elif channel == 'stop-training':
+             return {"success": True}
+        
+        elif channel == 'get-project-launch-params':
+            # Return empty or saved params
+             return {}
+        
+        elif channel == 'save-project-launch-params':
+             return {"success": True}
 
         return {"error": f"Unknown channel: {channel}"}
 
