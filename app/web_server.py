@@ -136,6 +136,138 @@ class IPCHandler(http.server.BaseHTTPRequestHandler):
         elif channel == 'run-backend':
             return {"status": "NOT_IMPLEMENTED", "message": "Backend streaming not supported in simple bridge"}
 
+        elif channel == 'create-new-project':
+            try:
+                # Logic from main.ts create-new-project
+                import datetime
+                now = datetime.datetime.now()
+                timestamp = now.strftime("%Y%m%d_%H-%M-%S")
+                output_dir = os.path.join(APP_ROOT_DIR, 'output', timestamp)
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Default templates
+                default_train = """[model]
+type = 'sdxl'
+checkpoint_path = ''
+unet_lr = 4e-05
+text_encoder_1_lr = 2e-05
+text_encoder_2_lr = 2e-05
+min_snr_gamma = 5
+dtype = 'bfloat16'
+
+[optimizer]
+type = 'adamw_optimi'
+lr = 2e-5
+betas = [0.9, 0.99]
+weight_decay = 0.01
+eps = 1e-8
+
+[adapter]
+type = 'lora'
+rank = 32
+dtype = 'bfloat16'
+
+# Training settings
+epochs = 10
+micro_batch_size_per_gpu = 1
+gradient_accumulation_steps = 1
+"""
+                default_dataset = """[[datasets]]
+input_path = ''
+resolutions = [1024]
+enable_ar_bucket = true
+min_ar = 0.5
+max_ar = 2.0
+num_repeats = 1
+"""
+                default_eval = """[[datasets]]
+input_path = ''
+resolutions = [1024]
+enable_ar_bucket = true
+"""
+                with open(os.path.join(output_dir, 'trainconfig.toml'), 'w', encoding='utf-8') as f:
+                    f.write(default_train)
+                with open(os.path.join(output_dir, 'dataset.toml'), 'w', encoding='utf-8') as f:
+                    f.write(default_dataset)
+                with open(os.path.join(output_dir, 'evaldataset.toml'), 'w', encoding='utf-8') as f:
+                    f.write(default_eval)
+                    
+                print(f"[Bridge] Created new project at {output_dir}")
+                # Return normalized path
+                normalized_path = output_dir.replace('\\', '/')
+                return {"success": True, "path": normalized_path}
+            except Exception as e:
+                print(f"[Bridge] New Project Error: {e}")
+                return {"success": False, "error": str(e)}
+
+        elif channel == 'delete-project-folder':
+            folder_path = args[0]
+            try:
+                import shutil
+                if os.path.exists(folder_path):
+                    shutil.rmtree(folder_path)
+                    
+                    # Update recent history
+                    settings = self.load_settings()
+                    recent = settings.get('recentProjects', [])
+                    new_recent = [p for p in recent if p['path'].replace('\\', '/') != folder_path.replace('\\', '/')]
+                    settings['recentProjects'] = new_recent
+                    self.save_settings(settings)
+                    
+                    return {"success": True, "projects": new_recent}
+                return {"success": False, "error": "Path not found"}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        elif channel == 'copy-folder-configs-to-date':
+            source_folder = args[0].get('sourceFolderPath')
+            try:
+                if not os.path.exists(source_folder):
+                    return {"success": False, "error": "Source not found"}
+                
+                import datetime
+                import shutil
+                now = datetime.datetime.now()
+                timestamp = now.strftime("%Y%m%d_%H-%M-%S")
+                output_dir = os.path.join(APP_ROOT_DIR, 'output', timestamp)
+                os.makedirs(output_dir, exist_ok=True)
+                
+                copied_files = []
+                # Simple copy logic
+                for f in os.listdir(source_folder):
+                    if f.endswith('.toml'):
+                        s = os.path.join(source_folder, f)
+                        d = os.path.join(output_dir, f)
+                        if os.path.isfile(s):
+                            shutil.copy2(s, d)
+                            copied_files.append(f)
+                            
+                return {"success": True, "outputFolder": output_dir.replace('\\', '/'), "copiedFiles": copied_files}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+        
+        elif channel == 'copy-to-date-folder':
+            source_path = args[0].get('sourcePath')
+            filename = args[0].get('filename')
+            try:
+                if not os.path.exists(source_path):
+                     return {"success": False, "error": "Source file not found"}
+
+                import datetime
+                import shutil
+                now = datetime.datetime.now()
+                timestamp = now.strftime("%Y%m%d_%H-%M-%S")
+                output_dir = os.path.join(APP_ROOT_DIR, 'output', timestamp)
+                os.makedirs(output_dir, exist_ok=True)
+                
+                target_name = filename if filename else os.path.basename(source_path)
+                dest_path = os.path.join(output_dir, target_name)
+                shutil.copy2(source_path, dest_path)
+                
+                return {"success": True, "path": dest_path.replace('\\', '/')}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
         return {"error": f"Unknown channel: {channel}"}
 
     def save_settings(self, settings):

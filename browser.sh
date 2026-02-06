@@ -11,32 +11,26 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}[INFO] 正在初始化浏览器访问环境 (Cloud/Headless Mode)...${NC}"
 
-if [ -f "$DIR/python/bin/python" ]; then
-    echo -e "${GREEN}[INFO] 检测到 Python 虚拟环境。${NC}"
-else
-    echo -e "${YELLOW}[INFO] 未检测到 Python 环境，正在通过系统 Python 创建虚拟环境...${NC}"
-    
-    if ! command -v python3 &> /dev/null; then
-        echo -e "${RED}[ERROR] 未找到 python3。请先在您的 Linux 系统中安装 Python 3.10+。${NC}"
-        exit 1
-    fi
+echo -e "${GREEN}[INFO] 云端模式：直接使用系统 Python 环境...${NC}"
 
-    python3 -m venv "$DIR/python"
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}[ERROR] 虚拟环境创建失败。${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}[INFO] Python 环境创建完成。${NC}"
+# Check for python3 or python
+if command -v python3 &> /dev/null; then
+    PYTHON_CMD=python3
+elif command -v python &> /dev/null; then
+    PYTHON_CMD=python
+else
+    echo -e "${RED}[ERROR] 未找到 python3 或 python。${NC}"
+    exit 1
 fi
 
-export PATH="$DIR/python/bin:$PATH"
+echo -e "${GREEN}[INFO] Using Python: $($PYTHON_CMD --version)${NC}"
 
 export VITE_WEB_ONLY=1
 
 mkdir -p "$DIR/logs"
 
 echo -e "${GREEN}[INFO] 正在启动 Python IPC 桥接服务 (Port 5001)...${NC}"
-python app/web_server.py > "$DIR/logs/web_bridge.log" 2>&1 &
+$PYTHON_CMD app/web_server.py > "$DIR/logs/web_bridge.log" 2>&1 &
 BRIDGE_PID=$!
 
 trap "kill $BRIDGE_PID 2>/dev/null" EXIT
