@@ -49,7 +49,7 @@ class IPCHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def handle_ipc(self, channel, args):
-        global CACHED_OUTPUT_FOLDER
+        global CACHED_OUTPUT_FOLDER, ACTIVE_TOOL_PROCESS, TOOL_LOGS
         
         # Implementation of core Electron IPC handlers
         if channel == 'get-language':
@@ -311,7 +311,7 @@ class IPCHandler(http.server.BaseHTTPRequestHandler):
                 
                 # Global lock for one active tool?
                 # We can store process in a global variable
-                global ACTIVE_TOOL_PROCESS
+                # global ACTIVE_TOOL_PROCESS <- Removed
                 if ACTIVE_TOOL_PROCESS and ACTIVE_TOOL_PROCESS.poll() is None:
                     return {"success": False, "error": "A tool is already running"}
 
@@ -326,7 +326,7 @@ class IPCHandler(http.server.BaseHTTPRequestHandler):
                 )
                 
                 # Start a thread to read logs
-                global TOOL_LOGS
+                # global TOOL_LOGS <- Removed
                 TOOL_LOGS = []
                 def read_logs():
                     if ACTIVE_TOOL_PROCESS:
@@ -344,20 +344,20 @@ class IPCHandler(http.server.BaseHTTPRequestHandler):
                 return {"success": False, "error": str(e)}
 
         elif channel == 'stop-tool':
-            global ACTIVE_TOOL_PROCESS
+            # global ACTIVE_TOOL_PROCESS <- Removed
             if ACTIVE_TOOL_PROCESS:
                 ACTIVE_TOOL_PROCESS.terminate()
                 ACTIVE_TOOL_PROCESS = None
             return {"success": True}
 
         elif channel == 'get-tool-status':
-            global ACTIVE_TOOL_PROCESS
+            # global ACTIVE_TOOL_PROCESS <- Removed
             is_running = ACTIVE_TOOL_PROCESS is not None and ACTIVE_TOOL_PROCESS.poll() is None
             # We don't track script name deeply in this simple bridge yet, but UI expects it
             return {"isRunning": is_running, "scriptName": "gemini_concurrent_tagging.py" if is_running else ""}
 
         elif channel == 'get-tool-logs':
-            global TOOL_LOGS
+            # global TOOL_LOGS <- Removed
             return TOOL_LOGS
 
         return {"error": f"Unknown channel: {channel}"}
