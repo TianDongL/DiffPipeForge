@@ -16,6 +16,8 @@ OUTPUT_DIR = os.path.join(APP_ROOT_DIR, 'output')
 
 # Global Session Cache
 CACHED_OUTPUT_FOLDER = None
+ACTIVE_TOOL_PROCESS = None
+TOOL_LOGS = []
 
 class IPCHandler(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -262,6 +264,101 @@ class IPCHandler(http.server.BaseHTTPRequestHandler):
                 return {"success": True, "path": file_path.replace('\\', '/'), "folder": output_dir.replace('\\', '/')}
             except Exception as e:
                 return {"success": False, "error": str(e)}
+
+        # --- Toolbox & Settings Handlers ---
+        elif channel == 'get-tool-settings':
+            tool_id = args[0]
+            settings = self.load_settings()
+            return settings.get('toolSettings', {}).get(tool_id, {})
+
+        elif channel == 'save-tool-settings':
+            tool_id = args[0].get('toolId')
+            new_settings = args[0].get('settings')
+            settings = self.load_settings()
+            if 'toolSettings' not in settings:
+                settings['toolSettings'] = {}
+            settings['toolSettings'][tool_id] = new_settings
+            self.save_settings(settings)
+            return {"success": True}
+
+        elif channel == 'dialog:openFile':
+            # Web mode cannot open system dialogs. Return canceled or a "web upload" stub?
+            # For select directory, we might want to return a "manual entry required" hint or just fail gracefully.
+            return {"canceled": True, "filePaths": []}
+
+        elif channel == 'run-tool':
+            script_name = args[0].get('scriptName')
+            script_args = args[0].get('args', [])
+            
+            # Simple single-process runner for web mode
+            try:
+                # Resolve script path (assuming backend/tools or similar)
+                # In main.ts logic: path.join(projectRoot, 'tools', script_name) matches? 
+                # Let's assume scripts are in app/backend/tools or similar.
+                # Actually main.ts assumes they are in the 'tools' folder relative to project root.
+                
+                # Check for script in potential locations
+                candidates = [
+                    os.path.join(APP_ROOT_DIR, 'tools', script_name),
+                    os.path.join(APP_ROOT_DIR, 'app', 'backend', 'tools', script_name),
+                ]
+                script_path = next((p for p in candidates if os.path.exists(p)), None)
+                
+                if not script_path:
+                    return {"success": False, "error": f"Script not found: {script_name}"}
+
+                cmd = [sys.executable, script_path] + [str(a) for a in script_args]
+                
+                # Global lock for one active tool?
+                # We can store process in a global variable
+                global ACTIVE_TOOL_PROCESS
+                if ACTIVE_TOOL_PROCESS and ACTIVE_TOOL_PROCESS.poll() is None:
+                    return {"success": False, "error": "A tool is already running"}
+
+                ACTIVE_TOOL_PROCESS = subprocess.Popen(
+                    cmd, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.STDOUT, 
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                    encoding='utf-8' # Force utf-8
+                )
+                
+                # Start a thread to read logs
+                global TOOL_LOGS
+                TOOL_LOGS = []
+                def read_logs():
+                    if ACTIVE_TOOL_PROCESS:
+                         for line in iter(ACTIVE_TOOL_PROCESS.stdout.readline, ''):
+                             TOOL_LOGS.append(line)
+                             print(f"[ToolLog] {line.strip()}")
+                         ACTIVE_TOOL_PROCESS.stdout.close()
+                
+                t = threading.Thread(target=read_logs)
+                t.daemon = True
+                t.start()
+
+                return {"success": True}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        elif channel == 'stop-tool':
+            global ACTIVE_TOOL_PROCESS
+            if ACTIVE_TOOL_PROCESS:
+                ACTIVE_TOOL_PROCESS.terminate()
+                ACTIVE_TOOL_PROCESS = None
+            return {"success": True}
+
+        elif channel == 'get-tool-status':
+            global ACTIVE_TOOL_PROCESS
+            is_running = ACTIVE_TOOL_PROCESS is not None and ACTIVE_TOOL_PROCESS.poll() is None
+            # We don't track script name deeply in this simple bridge yet, but UI expects it
+            return {"isRunning": is_running, "scriptName": "gemini_concurrent_tagging.py" if is_running else ""}
+
+        elif channel == 'get-tool-logs':
+            global TOOL_LOGS
+            return TOOL_LOGS
 
         return {"error": f"Unknown channel: {channel}"}
 
