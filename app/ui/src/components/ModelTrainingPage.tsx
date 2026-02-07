@@ -49,7 +49,9 @@ const DEFAULT_TRAINING_DATA = {
     eval_micro_batch_size_per_gpu: 1,
     eval_gradient_accumulation_steps: 1,
     eval_before_first_step: false,
-    disable_block_swap_for_eval: false
+    disable_block_swap_for_eval: false,
+    image_micro_batch_size_per_gpu: undefined,
+    image_eval_micro_batch_size_per_gpu: undefined
 };
 const DEFAULT_ADVANCED_DATA = {
     compile: false,
@@ -222,7 +224,8 @@ export function ModelTrainingPage({
                 // Added missing keys
                 'video_clip_mode', 'eval_micro_batch_size_per_gpu', 'eval_gradient_accumulation_steps',
                 'eval_every_n_epochs', 'eval_before_first_step', 'pseudo_huber_c',
-                'map_num_proc', 'steps_per_print', 'force_constant_lr'
+                'map_num_proc', 'steps_per_print', 'force_constant_lr',
+                'image_micro_batch_size_per_gpu', 'image_eval_micro_batch_size_per_gpu'
             ];
 
             trainKeys.forEach(key => {
