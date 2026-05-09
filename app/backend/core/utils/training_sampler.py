@@ -45,7 +45,7 @@ class CustomFlowMatchEulerDiscreteScheduler(FlowMatchEulerDiscreteScheduler):
 
         with torch.no_grad():
             num_timesteps = 1000
-            
+
             x = torch.arange(num_timesteps, dtype=torch.float32)
             y = torch.exp(-2 * ((x - num_timesteps / 2) / num_timesteps) ** 2)
 
@@ -138,7 +138,7 @@ class CustomFlowMatchEulerDiscreteScheduler(FlowMatchEulerDiscreteScheduler):
         elif timestep_type in ['flux_shift', 'lumina2_shift', 'shift']:
             sigmas = torch.linspace(1.0, 0.0, num_timesteps + 1, device=device)
             self.sigmas = sigmas # N+1 points
-            
+
             # Dynamic Shifting Logic from ai-toolkit
             if latents is not None:
                 # Assuming Flux/Z-Image style
@@ -146,11 +146,11 @@ class CustomFlowMatchEulerDiscreteScheduler(FlowMatchEulerDiscreteScheduler):
                 w = latents.shape[3]
                 # Patch size 1 or 2? ai-toolkit mentions doubling patch size for Flux?
                 # But here we just assume seq len based on H*W.
-                # Z-Image uses patch_size=2? Or 1? 
+                # Z-Image uses patch_size=2? Or 1?
                 # ai-toolkit defaults patch_size=1 in method arg.
-                
+
                 image_seq_len = h * w // (patch_size**2)
-                
+
                 # Default Flux params from ai-toolkit
                 mu = calculate_shift(
                     image_seq_len,
@@ -159,14 +159,14 @@ class CustomFlowMatchEulerDiscreteScheduler(FlowMatchEulerDiscreteScheduler):
                     base_shift=0.5,
                     max_shift=1.16
                 )
-                
+
                 # Apply shift: sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
                 # But shift is 'mu' here.
                 sigmas = mu * sigmas / (1 + (mu - 1) * sigmas)
             else:
                 # Fallback to static shift
                 sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
-            
+
             self.timesteps = sigmas[:-1] * 1000.0
             self.sigmas = sigmas
             return self.timesteps
@@ -180,7 +180,7 @@ class CustomFlowMatchEulerDiscreteScheduler(FlowMatchEulerDiscreteScheduler):
             t1 = ((1 - t1/t1.max()) * 1000)
             t2 = torch.linspace(1000, 1, int(num_timesteps * (1 - alpha)), device=device)
             timesteps = torch.cat((t1, t2))
-            
+
             timesteps, _ = torch.sort(timesteps, descending=True)
             timesteps = timesteps.to(torch.int)
             self.timesteps = timesteps.to(device=device)
@@ -202,11 +202,12 @@ class TrainingSampler:
         guidance_scale: float = 7.0,
         guidance_value: float = 4.0,
         sample_prompt: str = "",
-        tb_writer: Optional[Any] = None, 
+        tb_writer: Optional[Any] = None,
         shift: float = 1.0,
         timestep_type: str = "linear",
         height: int = 1024,
         width: int = 1024,
+        prefix: str = "",
     ):
 
         self.model_pipeline = model_pipeline
@@ -224,25 +225,26 @@ class TrainingSampler:
         self.timestep_type = timestep_type
         self.height = height
         self.width = width
+        self.prefix = prefix
         self.save_to_tensorboard = tb_writer is not None # Derived from tb_writer
         self.save_to_wandb = False # Original was False, keeping it as is.
         self._last_sampled_epoch = -1
-        
+
         if is_main_process():
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            
+
     def should_sample(self, step: Optional[int] = None, epoch: Optional[int] = None) -> bool:
 
-        if step is not None and self.sample_every_n_steps is not None:
+        if step is not None and self.sample_every_n_steps:
             if step % self.sample_every_n_steps == 0:
                 return True
-                
-        if epoch is not None and self.sample_every_n_epochs is not None:
+
+        if epoch is not None and self.sample_every_n_epochs:
             if epoch % self.sample_every_n_epochs == 0 and epoch != self._last_sampled_epoch:
                 return True
-                
+
         return False
-    
+
     @torch.no_grad()
     def sample_from_latents(
         self,
@@ -255,28 +257,28 @@ class TrainingSampler:
 
         if not is_main_process():
             return None
-        
+
         # Update last sampled epoch
         if epoch is not None:
             self._last_sampled_epoch = epoch
-        
+
         latents = latents.detach().clone()
-        
+
         if latents.shape[0] > 1:
             latents = latents[0:1]
-        
+
         vae = self.model_pipeline.get_vae()
-        
+
         try:
             if hasattr(vae, 'first_stage_model'):
                 vae_model = vae.first_stage_model
                 vae_params = list(vae_model.parameters()) if hasattr(vae_model, 'parameters') else []
-                
+
                 if vae_params and str(vae_params[0].device) == 'meta':
                     print("[Sampler] VAE first_stage_model is on meta device. Moving to CUDA...")
                     vae.first_stage_model = vae.first_stage_model.to('cuda')
                     print("[Sampler] Moved VAE first_stage_model to CUDA")
-            
+
             try:
                 image = self._decode_comfy_vae(latents, vae)
             except Exception as e:
@@ -284,17 +286,17 @@ class TrainingSampler:
                 import traceback
                 traceback.print_exc()
                 return []
-                 
+
         except Exception as e:
             print(f"[Sampler] Error handling VAE: {e}")
             import traceback
             traceback.print_exc()
             return []
-        
-        self._save_images(image, captions, step, epoch, prefix)
-        
+
+        self._save_images(image, captions, step, epoch, prefix, prefix="")
+
         return image
-    
+
     def _decode_latents(self, latents: torch.Tensor, vae) -> Image.Image:
 
         if hasattr(vae, 'decode'):
@@ -303,7 +305,7 @@ class TrainingSampler:
             return self._decode_comfy_vae(latents, vae)
         else:
             raise NotImplementedError(f"unknown VAE type: {type(vae)}")
-    
+
     def _decode_diffusers_vae(self, latents: torch.Tensor, vae) -> Image.Image:
         model_config = getattr(self.model_pipeline, 'model_config', {})
         if model_config.get('type') == 'z_image':
@@ -315,20 +317,20 @@ class TrainingSampler:
 
         latents = latents / scaling_factor
         latents = latents + shift_factor
-        
+
         device = getattr(vae, 'device', latents.device)
         dtype = getattr(vae, 'dtype', latents.dtype)
-        
+
         latents = latents.to(device, dtype)
-        
+
         decoded = vae.decode(latents).sample
-        
+
         img = decoded[0].cpu().float()
         img = ((img + 1) / 2).clamp(0, 1)
         pil_img = torchvision.transforms.functional.to_pil_image(img)
-        
+
         return pil_img
-    
+
     def _decode_comfy_vae(self, latents: torch.Tensor, vae) -> Image.Image:
         if hasattr(vae, 'first_stage_model'):
             vae_model = vae.first_stage_model
@@ -338,43 +340,43 @@ class TrainingSampler:
                     if str(param.device) == 'meta':
                         is_meta = True
                         break
-                
+
                 if is_meta:
                     print("[Sampler] VAE is on meta device. Reloading VAE from disk...")
-                    
+
                     from pathlib import Path
                     import comfy.utils
                     import comfy.sd
-                    
+
                     model_config = self.model_pipeline.model_config
                     model_dir = Path(model_config['checkpoint_path'])
                     vae_path = model_dir / 'vae' / 'diffusion_pytorch_model.safetensors'
-                    
+
                     if vae_path.exists():
                         print("[Sampler] Reloading VAE using Diffusers...")
-                        
+
                         import os
                         old_cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES', None)
                         os.environ['CUDA_VISIBLE_DEVICES'] = "0"
-                        
+
                         from diffusers import AutoencoderKL
-                        
+
                         vae_dir = vae_path.parent
-                        
+
                         try:
                             diffusers_vae = AutoencoderKL.from_pretrained(
                                 str(vae_dir),
                                 torch_dtype=torch.bfloat16,
                                 device_map='cuda:0'
                             )
-                            
+
                             print(f"[Sampler] Successfully loaded VAE from {vae_dir} to CUDA")
-                            
+
                             if old_cuda_visible_devices is not None:
                                 os.environ['CUDA_VISIBLE_DEVICES'] = old_cuda_visible_devices
                             else:
                                 os.environ.pop('CUDA_VISIBLE_DEVICES', None)
-                            
+
                             # Unscale latents
                             # Unscale latents
                             model_config = getattr(self.model_pipeline, 'model_config', {})
@@ -387,21 +389,21 @@ class TrainingSampler:
 
                             single_latent = latents[0:1].to('cuda', torch.bfloat16) / scaling_factor
                             single_latent = single_latent + shift_factor
-                            
+
                             decoded = diffusers_vae.decode(single_latent).sample
-                            
+
                             img = decoded[0].cpu().float()
                             img = ((img + 1) / 2).clamp(0, 1)
                             pil_img = torchvision.transforms.functional.to_pil_image(img)
-                            
+
                             return pil_img
-                            
+
                         except Exception as e:
                             if old_cuda_visible_devices is not None:
                                 os.environ['CUDA_VISIBLE_DEVICES'] = old_cuda_visible_devices
                             else:
                                 os.environ.pop('CUDA_VISIBLE_DEVICES', None)
-                                
+
                             print(f"[Sampler] Error loading VAE with Diffusers: {e}")
                             import traceback
                             traceback.print_exc()
@@ -413,9 +415,9 @@ class TrainingSampler:
                 print(f"[Sampler] Error checking VAE device: {e}")
         else:
             vae_model = vae
-        
+
         single_latent = latents[0:1].to('cuda')
-        
+
         try:
             first_param = next(vae_model.parameters())
             vae_dtype = first_param.dtype
@@ -425,12 +427,12 @@ class TrainingSampler:
         except Exception:
              single_latent = single_latent.to(torch.float32)
 
-        scaling_factor = 0.18215 
+        scaling_factor = 0.18215
         if hasattr(vae_model, 'scale_factor'):
              scaling_factor = vae_model.scale_factor
         elif hasattr(vae, 'config') and hasattr(vae.config, 'scaling_factor'):
              scaling_factor = vae.config.scaling_factor
-        
+
         single_latent = single_latent / scaling_factor
 
         try:
@@ -441,7 +443,7 @@ class TrainingSampler:
                  model_config = self.model_pipeline.model_config
                  model_dir = Path(model_config['checkpoint_path'])
                  vae_path = model_dir / 'vae' / 'diffusion_pytorch_model.safetensors'
-                 
+
                  if vae_path.exists():
                     print("[Sampler] meta device error，Reloading VAE using Diffusers...")
                     import os
@@ -459,11 +461,11 @@ class TrainingSampler:
                             os.environ['CUDA_VISIBLE_DEVICES'] = old_cuda_visible_devices
                         else:
                             os.environ.pop('CUDA_VISIBLE_DEVICES', None)
-                        
+
                         # Unscale latents for fallback
                         scaling_factor = diffusers_vae.config.scaling_factor if hasattr(diffusers_vae.config, 'scaling_factor') else 0.18215
                         single_latent = latents[0:1].to('cuda', torch.bfloat16) / scaling_factor
-                        
+
                         decoded = diffusers_vae.decode(single_latent).sample
                         img = decoded[0].cpu().float()
                         img = ((img + 1) / 2).clamp(0, 1)
@@ -475,22 +477,22 @@ class TrainingSampler:
                         else:
                             os.environ.pop('CUDA_VISIBLE_DEVICES', None)
                         print(f"[Sampler] Fallback reload failed: {load_e}")
-                        raise e 
+                        raise e
                  else:
                      raise e
             else:
                 raise e
-        
+
         if hasattr(decoded, 'sample'):
             decoded = decoded.sample
-        
+
         img = decoded[0].cpu().float()
-        
+
         img = ((img + 1) / 2).clamp(0, 1)
         pil_img = torchvision.transforms.functional.to_pil_image(img)
-        
+
         return pil_img
-    
+
     def _save_images(
         self,
         image: Image.Image,
@@ -501,29 +503,32 @@ class TrainingSampler:
     ):
         triggered_by_step = False
         triggered_by_epoch = False
-        
-        if step is not None and self.sample_every_n_steps is not None:
+
+        if step is not None and self.sample_every_n_steps:
             if step % self.sample_every_n_steps == 0:
                 triggered_by_step = True
-        
-        if epoch is not None and self.sample_every_n_epochs is not None:
+
+        if epoch is not None and self.sample_every_n_epochs:
             if epoch % self.sample_every_n_epochs == 0:
                 triggered_by_epoch = True
-        
+
+        base_name = ""
         if triggered_by_step and step is not None:
-            filename = f"step{step}.png"
+            base_name = f"step{step}"
         elif triggered_by_epoch and epoch is not None:
-            filename = f"epoch{epoch}.png"
+            base_name = f"epoch{epoch}"
         elif step is not None:
-            filename = f"step{step}.png"
+            base_name = f"step{step}"
         elif epoch is not None:
-            filename = f"epoch{epoch}.png"
+            base_name = f"epoch{epoch}"
         else:
-            filename = f"{int(time.time())}.png"
+            base_name = f"{int(time.time())}"
+
+        filename = f"{prefix}_{base_name}.png" if prefix else f"{base_name}.png"
         filepath = self.output_dir / filename
         image.save(filepath)
-        
-        
+
+
         print(f"saved image to {filepath}")
 
         if self.tb_writer is not None:
@@ -534,11 +539,11 @@ class TrainingSampler:
                      tag += f"_e{epoch}"
                  if step is not None:
                      tag += f"_s{step}"
-                 
+
                  self.tb_writer.add_image(tag, img_tensor, global_step=step if step is not None else epoch)
              except Exception as e:
                  print(f"Error logging image to TensorBoard: {e}")
-    
+
     @torch.no_grad()
     def sample_from_batch(
         self,
@@ -547,83 +552,88 @@ class TrainingSampler:
         step: Optional[int] = None,
         epoch: Optional[int] = None,
     ):
+        import deepspeed.comm.comm as dist
+        from utils.common import is_main_process
         text_encoder = None
-        
+
         try:
             if not self.should_sample(step, epoch):
                 return
-            
-            if not is_main_process():
-                return
 
-            noisy_latents = None
-            if isinstance(batch, (tuple, list)):
-                if len(batch) == 2 and isinstance(batch[0], (tuple, list)):
-                    inputs = batch[0]
-                    if len(inputs) >= 1:
-                        noisy_latents = inputs[0]
-            elif isinstance(batch, dict):
-                noisy_latents = batch.get('latents')
-            
-            if noisy_latents is None:
-                # Try to find latents in a list of dicts or similar
+            # Everyone enters this function to guarantee dist.barrier() runs synchronously on all processes
+            if is_main_process():
+                noisy_latents = None
                 if isinstance(batch, (tuple, list)):
-                     for item in batch:
-                        if isinstance(item, dict) and 'latents' in item:
-                            noisy_latents = item['latents']
-                            break
-            
-            if noisy_latents is None:
-                print("[Sampler] Could not find latents in batch to determine shape. Skipping.")
-                return
+                    if len(batch) == 2 and isinstance(batch[0], (tuple, list)):
+                        inputs = batch[0]
+                        if len(inputs) >= 1:
+                            noisy_latents = inputs[0]
+                elif isinstance(batch, dict):
+                    noisy_latents = batch.get('latents')
+
+                if noisy_latents is None:
+                    if isinstance(batch, (tuple, list)):
+                         for item in batch:
+                            if isinstance(item, dict) and 'latents' in item:
+                                noisy_latents = item['latents']
+                                break
+                            if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[0], (tuple, list)):
+                                inputs = item[0]
+                                if len(inputs) >= 1:
+                                    noisy_latents = inputs[0]
+                                    break
+
+                if noisy_latents is None:
+                    print("[Sampler] Could not find latents in batch to determine shape. Skipping.")
 
         except Exception as e:
-            print(f"[Sampler] Error preparing batch: {e}")
-            return
+            if is_main_process():
+                print(f"[Sampler] Error preparing batch: {e}")
 
-        
+        if not is_main_process():
+            dist.barrier()
+            torch.cuda.empty_cache()
+            return []
+
         try:
-            model = self.model_pipeline
-            vae = model.get_vae()
+            if is_main_process() and ('noisy_latents' in locals() and noisy_latents is not None):
+                model = self.model_pipeline
+                vae = model.get_vae()
 
-            if not (hasattr(model, 'get_call_text_encoder_fn') and hasattr(model, 'get_text_encoders')):
-                print("[Sampler] Model pipeline does not support text encoding. Skipping inference.")
-                return []
+                if not (hasattr(model, 'get_call_text_encoder_fn') and hasattr(model, 'get_text_encoders')):
+                    print("[Sampler] Model pipeline does not support text encoding. Skipping inference.")
+                else:
+                    text_encoders = model.get_text_encoders()
+                    if len(text_encoders) > 0:
+                        call_text_encoder_fn = model.get_call_text_encoder_fn(text_encoders[0])
+                        text_encoder = text_encoders[0]
 
-            text_encoders = model.get_text_encoders()
-            if len(text_encoders) == 0:
-                return []
-                
-            call_text_encoder_fn = model.get_call_text_encoder_fn(text_encoders[0])
-            
-            text_encoder = text_encoders[0]
-            
             try:
                 first_param = next(text_encoder.parameters(), None)
                 if first_param is None:
                     print("[Sampler] Text encoder has no parameters. Skipping.")
                     return []
-                    
+
                 if first_param.device.type == 'meta':
                     print("[Sampler] Text encoder is on meta device, materializing to CUDA...")
-                    
+
                     try:
                         from transformers import AutoModel
                         import os
-                        
+
                         text_encoder_path = None
-                        
+
                         if hasattr(model, 'text_encoder_path'):
                             text_encoder_path = model.text_encoder_path
                         elif hasattr(model, 'checkpoint_path'):
                             text_encoder_path = os.path.join(model.checkpoint_path, "text_encoder")
                         elif hasattr(model, 'config') and hasattr(model.config, 'text_encoder'):
                             text_encoder_path = model.config.text_encoder
-                        
+
                         if text_encoder_path and os.path.exists(text_encoder_path):
                             print(f"[Sampler] Reloading text encoder from {text_encoder_path}...")
                             text_encoder = AutoModel.from_pretrained(
-                                text_encoder_path, 
+                                text_encoder_path,
                                 torch_dtype=torch.bfloat16,
                                 trust_remote_code=True
                             ).to('cuda')
@@ -634,41 +644,41 @@ class TrainingSampler:
                         else:
                             print(f"[Sampler] Cannot find text encoder path (tried: {text_encoder_path}), skipping inference.")
                             return []
-                            
+
                     except Exception as e:
                         print(f"[Sampler] Failed to reload text encoder: {e}")
                         import traceback
                         traceback.print_exc()
                         print("[Sampler] Skipping inference.")
                         return []
-                    
+
             except Exception as e:
                 print(f"[Sampler] Cannot check/move text encoder device: {e}")
                 print("[Sampler] Skipping full inference.")
                 return []
-            
+
             captions = None
-            
+
             if self.sample_prompt:
                 captions = [self.sample_prompt] * noisy_latents.shape[0]
             elif isinstance(batch, dict):
                 captions = batch.get('caption')
-            
+
             if captions is None:
                 captions = [""] * noisy_latents.shape[0]
-                
+
             num_inference_steps = self.num_inference_steps
             guidance_scale = self.guidance_scale
             guidance_value = self.guidance_value
-            
+
             uncond_captions = [""] * len(captions)
             is_video = [False] * len(captions)
-            
+
             with torch.no_grad():
                 cond_outputs = call_text_encoder_fn(captions, is_video)
                 cond_embeds = cond_outputs['encoder_hidden_states']
                 cond_pooled = cond_outputs['pooled_projections']
-                
+
                 uncond_outputs = call_text_encoder_fn(uncond_captions, is_video)
                 uncond_embeds = uncond_outputs['encoder_hidden_states']
                 uncond_pooled = uncond_outputs['pooled_projections']
@@ -678,18 +688,18 @@ class TrainingSampler:
                 shift=self.shift,
             )
             scheduler.set_train_timesteps(
-                num_inference_steps, 
-                device='cuda', 
+                num_inference_steps,
+                device='cuda',
                 timestep_type=self.timestep_type,
                 shift=self.shift
             )
-            
+
             if noisy_latents.ndim == 3:
                 img_ids = None
                 if isinstance(batch, (tuple, list)) and len(batch) == 2:
                     inputs = batch[0]
                     if len(inputs) >= 5:
-                        img_ids = inputs[4]  
+                        img_ids = inputs[4]
 
                 if img_ids is not None:
                     h_ids = img_ids[..., 1].long()
@@ -697,19 +707,19 @@ class TrainingSampler:
                     H = int(h_ids.max().item()) + 1
                     W = int(w_ids.max().item()) + 1
                     B = noisy_latents.shape[0]
-                    
-                    
-                    C = 16                   
+
+
+                    C = 16
                     downscale = 8
                     H_latent = self.height // downscale
                     W_latent = self.width // downscale
-                    
+
                     latents = torch.randn(B, C, H_latent, W_latent, device='cuda', dtype=torch.float32)
 
                     if hasattr(model, '_prepare_latent_image_ids'):
-                         pass 
-                    
-                    
+                         pass
+
+
                     if hasattr(model, '_prepare_latent_image_ids'):
                          img_ids = model._prepare_latent_image_ids(B, H_latent, W_latent, 'cuda', torch.bfloat16) # Assuming bfloat16
                     else:
@@ -730,8 +740,8 @@ class TrainingSampler:
                 W_latent = self.width // downscale
                 C = noisy_latents.shape[1]
                 latents = torch.randn(B, C, H_latent, W_latent, device='cuda', dtype=torch.float32)
-                img_ids = None 
-            
+                img_ids = None
+
             # Re-initialize scheduler with latents for dynamic shifting (Flux/Z-Image)
             scheduler.set_train_timesteps(
                 num_inference_steps,
@@ -749,13 +759,13 @@ class TrainingSampler:
                 latents=latents,
                 shift=self.shift
             )
-            
+
             print(f"[Sampler] Starting full inference (CFG={guidance_scale}, Steps={num_inference_steps})...")
-            
+
             merge_adapters = model.model_config.get('merge_adapters', [])
             if isinstance(merge_adapters, str):
                 merge_adapters = [merge_adapters]
-            
+
             for adapter_path in merge_adapters:
                 print(f"[Sampler] Subtracting adapter {adapter_path} for sampling...")
                 try:
@@ -770,28 +780,28 @@ class TrainingSampler:
             try:
                 for i, t in enumerate(scheduler.timesteps):
                     latent_model_input = scheduler.scale_model_input(latents, t)
-                    
+
                     bs, c, h, w = latent_model_input.shape
                     device = latent_model_input.device
                     dtype = latent_model_input.dtype
-                    
+
                     model_t = 1.0 - (t / 1000.0)
                     model_t = model_t.to(device, dtype)
                     if model_t.ndim == 0:
                          model_t = model_t.unsqueeze(0).repeat(bs)
-                    
+
 
                     def run_model(x, encoder_hidden_states, pooled_projections):
                         lengths = [e.shape[0] for e in encoder_hidden_states]
                         max_len = max(lengths)
                         embed_dim = encoder_hidden_states[0].shape[1]
-                        
+
                         padded_embeds = torch.zeros(bs, max_len, embed_dim, dtype=dtype, device=device)
                         for idx, e in enumerate(encoder_hidden_states):
                             l = lengths[idx]
                             padded_embeds[idx, :l] = e.to(device)
                         txt_lens = torch.tensor(lengths, dtype=torch.long, device=device)
-                        
+
                         if hasattr(model, '_prepare_latent_image_ids'):
                             img_ids = model._prepare_latent_image_ids(bs, h, w, device, dtype)
                         else:
@@ -799,74 +809,74 @@ class TrainingSampler:
                             latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(h)[:, None]
                             latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(w)[None, :]
                             img_ids = latent_image_ids.reshape(-1, 3).to(device=device, dtype=dtype)
-                            
+
                         if img_ids.ndim == 2:
                             img_ids = img_ids.unsqueeze(0).repeat((bs, 1, 1))
-                        
+
                         txt_ids = torch.zeros(bs, max_len, 3).to(device, dtype)
                         guidance_vec = torch.full((bs,), guidance_value, device=device, dtype=torch.float32)
                         img_seq_len = torch.tensor(h * w, device=device).repeat((bs,))
-                        
+
                         x_flat = rearrange(x, "b c h w -> b (h w) c")
-                        
+
                         inputs = (x_flat, padded_embeds, pooled_projections, model_t, img_ids, txt_ids, guidance_vec, img_seq_len, txt_lens)
-                        
+
                         transformer = model.transformer
                         embedding_wrapper = EmbeddingWrapper(transformer)
-                        
+
                         unified, unified_attn_mask, unified_freqs_cis, adaln_input, x_size, patch_size, f_patch_size = embedding_wrapper(inputs)
-                        
+
                         if hasattr(transformer, 'transformer_blocks'):
                             blocks = transformer.transformer_blocks
                         elif hasattr(transformer, 'blocks'):
                             blocks = transformer.blocks
                         else:
                             blocks = transformer.layers
-                            
+
                         for block in blocks:
                              unified = block(unified, unified_attn_mask, unified_freqs_cis, adaln_input)
-                             
+
                         output_wrapper = OutputWrapper(transformer)
                         output_inputs = (unified, unified_attn_mask, unified_freqs_cis, adaln_input, x_size, patch_size, f_patch_size)
                         output = output_wrapper(output_inputs)
-                        
+
                         if isinstance(output, list):
                             output = torch.stack(output) if len(output) > 0 else output[0]
-                        
+
                         return output
 
                     with torch.no_grad():
                         noise_pred_cond = run_model(latent_model_input, cond_embeds, cond_pooled)
-                        
+
                         if not isinstance(noise_pred_cond, torch.Tensor):
                             if isinstance(noise_pred_cond, list):
                                 noise_pred_cond = torch.stack(noise_pred_cond) if len(noise_pred_cond) > 1 else noise_pred_cond[0]
-                        
+
                         if noise_pred_cond.ndim == 5 and noise_pred_cond.shape[2] == 1:
                             noise_pred_cond = noise_pred_cond.squeeze(2)
 
                         if guidance_scale > 1.0:
                             noise_pred_uncond = run_model(latent_model_input, uncond_embeds, uncond_pooled)
-                            
+
                             if not isinstance(noise_pred_uncond, torch.Tensor):
                                 if isinstance(noise_pred_uncond, list):
                                     noise_pred_uncond = torch.stack(noise_pred_uncond) if len(noise_pred_uncond) > 1 else noise_pred_uncond[0]
-                            
+
                             if noise_pred_uncond.ndim == 5 and noise_pred_uncond.shape[2] == 1:
                                 noise_pred_uncond = noise_pred_uncond.squeeze(2)
-                                
+
                             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
                         else:
                             # For Turbo/Distilled models (scale <= 1.0, e.g. 0.0 or 1.0), skip uncond and use cond directly
                             noise_pred = noise_pred_cond
-                        
+
                         noise_pred = -noise_pred
-                        
+
                         latents = scheduler.step(noise_pred, t, latents).prev_sample
             finally:
                 if was_training:
                     model.transformer.train()
-                
+
                 # Restore adapters
                 for adapter_path in merge_adapters:
                     print(f"[Sampler] Restoring adapter {adapter_path}...")
@@ -876,31 +886,32 @@ class TrainingSampler:
                             model.transformer.unload_lora()
                     except Exception as e:
                         print(f"[Sampler] Warning: Failed to restore adapter {adapter_path}: {e}")
-            
-            print(f"[Sampler] Inference completed successfully! Saving samples...")
 
-            self.sample_from_latents(
-                latents=latents,
-                captions=captions,
-                step=step,
-                epoch=epoch,
-                prefix=f"inference_cfg{guidance_scale}_step{num_inference_steps}"
-            )
-            
-            return []
+                print(f"[Sampler] Inference completed successfully! Saving samples...")
+
+                self.sample_from_latents(
+                    latents=latents,
+                    captions=captions,
+                    step=step,
+                    epoch=epoch,
+                    prefix=f"{self.prefix}_cfg{guidance_scale}_step{num_inference_steps}" if getattr(self, "prefix", "") else f"inference_cfg{guidance_scale}_step{num_inference_steps}"
+                )
 
         except Exception as e:
-            print(f"[Sampler] Error during full inference: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            print("[Sampler] Falling back to reconstruction...")
-            
+            if is_main_process():
+                print(f"[Sampler] Error during full inference: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
         finally:
-            if text_encoder is not None and str(text_encoder.device) != 'meta':
-                 text_encoder.to('meta')
-                 
-                 if hasattr(model, 'text_encoder'):
-                     model.text_encoder.to('meta')
-                     
-                 call_text_encoder_fn = None
-                 torch.cuda.empty_cache()
+            if is_main_process():
+                print("[Sampler] Falling back to reconstruction...")
+                if text_encoder is not None and str(text_encoder.device) != 'meta':
+                     text_encoder.to('meta')
+                     if hasattr(model, 'text_encoder'):
+                         model.text_encoder.to('meta')
+                     call_text_encoder_fn = None
+
+            dist.barrier()
+            torch.cuda.empty_cache()
+            return []

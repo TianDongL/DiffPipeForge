@@ -48,3 +48,13 @@ lr = 2e-5
 betas = [0.9, 0.99]
 weight_decay = 0.01
 stabilize = false
+
+[sampler]
+sample_every_n_epochs = 1
+sample_prompt = 'an apple on a table'
+sample_steps = 20
+guidance_scale = 5.0
+guidance_value = 4.0
+height = 512
+width = 512
+shift = 1.0

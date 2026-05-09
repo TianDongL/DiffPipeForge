@@ -1,5 +1,7 @@
 import argparse
 import os
+import sys
+sys.modules["comfy_kitchen"] = None
 
 #for windows===========================================================================
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +45,8 @@ from utils.isolate_rng import isolate_rng
 from utils.patches import apply_patches
 from utils.unsloth_utils import unsloth_checkpoint
 from utils.pipeline import ManualPipelineModule
+from utils.memory_management import MemoryManager
+from utils.training_sampler import TrainingSampler
 
 # needed for broadcasting Queue in dataset.py
 mp.current_process().authkey = b'afsaskgfdjh4'
@@ -255,7 +259,7 @@ def distributed_init(args):
     world_size = 1
     rank = 0
     local_rank = 0
-    
+
     # Force environment variables for single GPU
     os.environ['WORLD_SIZE'] = '1'
     os.environ['RANK'] = '0'
@@ -379,7 +383,7 @@ if __name__ == '__main__':
         model = z_image.ZImagePipeline(config)
     elif model_type == 'hunyuan_video_15':
         from models import hunyuan_video_15
-        model = hunyuan_video_15.HunyuanVideo15Pipeline(config)    
+        model = hunyuan_video_15.HunyuanVideo15Pipeline(config)
     elif model_type == 'qwen2511':
         from models import qwen2511
         model = qwen2511.Qwen2511Pipeline(config)
@@ -549,7 +553,7 @@ if __name__ == '__main__':
             run_dir_container[0] = os.path.join(config['output_dir'], resume_from_checkpoint)
         else:
             run_dir_container[0] = os.path.join(config['output_dir'], datetime.now(timezone.utc).strftime('%Y%m%d_%H-%M-%S'))
-    
+
     torch.distributed.broadcast_object_list(run_dir_container, src=0, group=dist.get_world_group())
     run_dir = run_dir_container[0]
 
@@ -877,6 +881,33 @@ if __name__ == '__main__':
     tb_writer = SummaryWriter(log_dir=run_dir) if is_main_process() else None
     saver = utils.saver.Saver(args, config, is_adapter, run_dir, model, train_dataloader, model_engine, pipeline_model)
 
+    # Initialize Native Training Sampler
+    sampler_config = config.get('sampler', {})
+    training_samplers = []
+    if sampler_config:
+        # Handle both single dict and list of dicts for backward compatibility
+        sampler_configs = sampler_config if isinstance(sampler_config, list) else [sampler_config]
+
+        for idx, s_config in enumerate(sampler_configs):
+            ts = TrainingSampler(
+                model_pipeline=model,
+                output_dir=os.path.join(run_dir, 'samples'),
+                sample_every_n_steps=s_config.get('sample_every_n_steps', None),
+                sample_every_n_epochs=s_config.get('sample_every_n_epochs', None),
+                save_images=True,
+                num_inference_steps=s_config.get('sample_steps', 20),
+                guidance_scale=s_config.get('guidance_scale', 7.0),
+                guidance_value=s_config.get('guidance_value', 4.0),
+                sample_prompt=s_config.get('sample_prompt', ""),
+                tb_writer=tb_writer,
+                shift=s_config.get('shift', 1.0),
+                timestep_type=s_config.get('timestep_type', "linear"),
+                height=s_config.get('height', 1024),
+                width=s_config.get('width', 1024),
+                prefix=f"sampler_{idx}"
+            )
+            training_samplers.append(ts)
+
     disable_block_swap_for_eval = config.get('disable_block_swap_for_eval', False)
     if config['eval_before_first_step'] and not resume_from_checkpoint:
         evaluate(model, model_engine, eval_dataloaders, tb_writer, 0, config['eval_gradient_accumulation_steps'], disable_block_swap_for_eval)
@@ -887,7 +918,9 @@ if __name__ == '__main__':
     empty_cuda_cache()
     while True:
         model_engine.reset_activation_shape()
-        iterator = get_data_iterator_for_step(train_dataloader, model_engine)
+        data_iterator = get_data_iterator_for_step(train_dataloader, model_engine)
+        micro_batches = list(data_iterator) if data_iterator is not None else None
+        iterator = iter(micro_batches) if micro_batches is not None else None
         loss = model_engine.train_batch(iterator).item()
         epoch_loss += loss
         num_steps += 1
@@ -917,6 +950,15 @@ if __name__ == '__main__':
 
         if (config['eval_every_n_steps'] and step % config['eval_every_n_steps'] == 0) or (finished_epoch and config['eval_every_n_epochs'] and epoch % config['eval_every_n_epochs'] == 0):
             evaluate(model, model_engine, eval_dataloaders, tb_writer, x_axis, config['eval_gradient_accumulation_steps'], disable_block_swap_for_eval)
+
+        # Trigger Native Training Samplers (Multi-queue)
+        for ts in training_samplers:
+            if ts.should_sample(step=step, epoch=epoch if finished_epoch else None):
+                ts.sample_from_batch(
+                    batch=micro_batches,
+                    step=step,
+                    epoch=epoch
+                )
 
         if finished_epoch:
             if is_main_process():

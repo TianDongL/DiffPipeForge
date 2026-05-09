@@ -696,7 +696,27 @@
         "llm_adapter_lr": "适配器的学习率。这是一个在将 LLM 嵌入输入扩散模型之前对其进行处理的适配器。设置为 0 将禁用其训练。这可能会使小数据集的训练更加稳定。如果你有一个较大的数据集或许多全新的概念，可以尝试训练 llm_adapter 看看是否有帮助",
         "cache_shuffle_num": "缓存的标签打乱版本数。若大于 0，则会为每张图片生成多个随机打乱标签顺序的版本用于训练，增加泛化性。仅适用于标签式的 Caption（如 Danbooru 风格），不适用于自然语言描述。",
         "cache_shuffle_delimiter": "标签分隔符。用于识别并分割 Caption 中的标签，默认为英文逗号+空格 ',' 。",
-        "mask_path": "遮罩图片文件夹路径。遮罩用于指定图片中需要关注或忽略的区域，训练时将根据遮罩调整损失计算权重。白色是重点训练，黑色是不训练，灰色是训练权重减半。"
+        "mask_path": "遮罩图片文件夹路径。遮罩用于指定图片中需要关注或忽略的区域，训练时将根据遮罩调整损失计算权重。白色是重点训练，黑色是不训练，灰色是训练权重减半。",
+        "sampler_every_n_epochs": "训练多少个 Epoch 后自动生成一张图片。",
+        "sampler_every_n_steps": "训练多少步后自动生成一张图片。如果设置，会同时按 Epoch 和 Step 采样。",
+        "sampler_prompt": "用于生成预览图的文字描述（需为英文）。",
+        "sampler_guidance_scale": "分类器自由引导尺度 (CFG Scale)。更高的值会让图像更贴合提示词，但可能降低多样性，通常为 4.0 - 7.0。",
+        "sampler_width": "预览图宽度，默认为 512，建议和你的常见训练分辨率宽高比保持一致。",
+        "sampler_height": "预览图高度，默认为 512。",
+        "sampler_seed": "生图的随机种子，默认 42。固定的种子有助于对比不同 Epoch 下模型的生成效果变化。",
+        "sampler_name": "扩散模型采样器（如 euler, euler_ancestral, dpm_2 等）。"
+    },
+    "sampler": {
+        "title": "原生预览出图",
+        "desc": "在训练期间自动生成预览图像，无需借助外部 ComfyUI。",
+        "sample_every_n_epochs": "每 N 轮采样一次",
+        "sample_every_n_steps": "每 N 步采样一次 (0不按步数)",
+        "sample_prompt": "采样提示词 (Prompt)",
+        "guidance_scale": "引导尺度 (CFG)",
+        "width": "图像宽度",
+        "height": "图像高度",
+        "seed": "随机种子",
+        "sampler_name": "采样算法"
     },
     "diagnostics": {
         "title": "系统诊断",

@@ -10,6 +10,7 @@ import { AdvancedTrainingConfig } from "./AdvancedTrainingConfig";
 import { OptimizerConfig } from "./OptimizerConfig";
 import { AdapterConfig } from "./AdapterConfig";
 import { MonitoringConfig } from "./MonitoringConfig";
+import { SamplerConfig } from "./SamplerConfig";
 
 interface ModelTrainingPageProps {
     importedConfig?: any;
@@ -78,6 +79,7 @@ const DEFAULT_MONITORING_DATA = {
     wandb_tracker_name: '',
     wandb_run_name: ''
 };
+const DEFAULT_SAMPLER_DATA: any[] = [];
 
 export function ModelTrainingPage({
     importedConfig,
@@ -95,6 +97,7 @@ export function ModelTrainingPage({
     const [optimizerData, setOptimizerData] = useState<any>(DEFAULT_OPTIMIZER_DATA);
     const [adapterData, setAdapterData] = useState<any>(DEFAULT_ADAPTER_DATA);
     const [monitoringData, setMonitoringData] = useState<any>(DEFAULT_MONITORING_DATA);
+    const [samplerData, setSamplerData] = useState<any[]>(DEFAULT_SAMPLER_DATA);
     const [resetKey, setResetKey] = useState(0);
     const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
 
@@ -272,6 +275,16 @@ export function ModelTrainingPage({
                     wandb_run_name: mon.wandb_run_name
                 }));
             }
+
+            // 7. Map Sampler Data (Decode object/array if present)
+            if (importedConfig.sampler) {
+                const s = importedConfig.sampler;
+                if (Array.isArray(s)) {
+                    setSamplerData(s);
+                } else if (typeof s === 'object') {
+                    setSamplerData([s]);
+                }
+            }
         }
     }, [importedConfig]);
 
@@ -332,6 +345,7 @@ export function ModelTrainingPage({
             optimizer: optimizerData,
             adapter: adapterData,
             monitoring: monitoringData,
+            sampler: samplerData,
             dataset: datasetPath,
             eval_datasets: evalSets.map((set, idx) => ({
                 name: set.name || `validation_set_${idx}`,
@@ -351,7 +365,7 @@ export function ModelTrainingPage({
             // For advanced params (defaults were 0 or false), if they are 0/false, remove them
             // partition_split is a string, so it won't be caught by === 0 check
             if (val === 0 || val === false || val === '0' || val === 'false') {
-                // Keep some keys that might authentically be 0? 
+                // Keep some keys that might authentically be 0?
                 // Currently user wants to "filter out if set back to 0".
                 // We know these keys started as undefined or 0 in advancedData.
                 // Safest to list the keys we definitely want to drop if 0.
@@ -759,6 +773,36 @@ export function ModelTrainingPage({
                 lines.push(`enable_wandb = false`);
             }
 
+            // Sampler Config Block (Structured Array Injection)
+            if (fullConfig.sampler && Array.isArray(fullConfig.sampler) && fullConfig.sampler.length > 0) {
+                fullConfig.sampler.forEach((samplerItem: any) => {
+                    if (Object.keys(samplerItem).length > 0) {
+                        let hasValidKeys = false;
+                        const samplerLines: string[] = [];
+
+                        Object.entries(samplerItem).forEach(([k, v]) => {
+                            if (v !== '' && v !== undefined && v !== null) {
+                                hasValidKeys = true;
+                                if (['width', 'height', 'sample_every_n_epochs', 'sample_every_n_steps', 'seed'].includes(k)) {
+                                    const n = Number(v);
+                                    if (!isNaN(n)) samplerLines.push(`${k} = ${Math.round(n)}`);
+                                } else if (k === 'sample_prompt' && typeof v === 'string' && v.includes('\n')) {
+                                    // Handle multiline strings in TOML
+                                    samplerLines.push(`${k} = '''\n${v}\n'''`);
+                                } else {
+                                    samplerLines.push(`${k} = ${formatValue(v)}`);
+                                }
+                            }
+                        });
+
+                        if (hasValidKeys) {
+                            lines.push('\n[[sampler]]');
+                            lines.push(...samplerLines);
+                        }
+                    }
+                });
+            }
+
             const tomlString = lines.join('\n');
 
             const result = await window.ipcRenderer.invoke('save-to-date-folder', {
@@ -800,7 +844,7 @@ export function ModelTrainingPage({
 
         setSaveTimeout(timeout);
         return () => clearTimeout(timeout);
-    }, [modelData, trainingData, advancedData, optimizerData, adapterData, monitoringData, evalSets, sessionFolder]);
+    }, [modelData, trainingData, advancedData, optimizerData, adapterData, monitoringData, samplerData, evalSets, sessionFolder]);
 
 
     const handleReset = () => {
@@ -810,6 +854,7 @@ export function ModelTrainingPage({
         setOptimizerData(DEFAULT_OPTIMIZER_DATA);
         setAdapterData(DEFAULT_ADAPTER_DATA);
         setMonitoringData(DEFAULT_MONITORING_DATA);
+        setSamplerData(DEFAULT_SAMPLER_DATA);
         setResetKey(prev => prev + 1);
         setIsResetDialogOpen(false);
     };
@@ -836,6 +881,7 @@ export function ModelTrainingPage({
             <AdvancedTrainingConfig key={`advanced-${resetKey}`} data={advancedData} onChange={setAdvancedData} />
             <OptimizerConfig key={`optimizer-${resetKey}`} data={optimizerData} onChange={setOptimizerData} />
             <AdapterConfig key={`adapter-${resetKey}`} data={adapterData} onChange={setAdapterData} />
+            <SamplerConfig key={`sampler-${resetKey}`} data={samplerData} onChange={setSamplerData} />
             <MonitoringConfig data={monitoringData} onChange={setMonitoringData} />
 
             <div className="flex justify-end gap-3 pt-4">

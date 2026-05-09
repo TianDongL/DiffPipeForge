@@ -694,7 +694,27 @@
         "llm_adapter_lr": "Learning rate for the LLM adapter. This is an adapter that processes LLM embeddings before feeding them into the diffusion model. Setting this to 0 disables its training,which may makes training more stable for small datasets, if you have a large dataset or many new concepts, you can try training llm_adapter to see if it helps",
         "cache_shuffle_num": "Number of shuffled tag versions to cache. If > 0, generates multiple randomly shuffled tag versions per image for training, improving generalization. Only applies to tag-based captions (e.g., Danbooru style), not natural language descriptions.",
         "cache_shuffle_delimiter": "Tag delimiter. Used to identify and split tags in the caption. Default is comma + space ', '.",
-        "mask_path": "Path to the mask images folder. Masks specify which regions of the image to focus on or ignore during training, adjusting loss calculation weights accordingly. White is the focus region, black is the non-focus region, gray is the focus region with reduced training weight."
+        "mask_path": "Path to the mask images folder. Masks specify which regions of the image to focus on or ignore during training, adjusting loss calculation weights accordingly. White is the focus region, black is the non-focus region, gray is the focus region with reduced training weight.",
+        "sampler_every_n_epochs": "Generate an image after this many training epochs.",
+        "sampler_every_n_steps": "Generate an image after this many training steps. If set, generates per step AND epoch.",
+        "sampler_prompt": "Text description for generating the preview image.",
+        "sampler_guidance_scale": "Classifier Free Guidance (CFG) scale. Higher values closely match the prompt but lower diversity. Usually 4.0 - 7.0.",
+        "sampler_width": "Preview image width. Default is 512. Try to match your training aspect ratio.",
+        "sampler_height": "Preview image height. Default is 512.",
+        "sampler_seed": "Random seed for generation, default 42. Fixed seed helps compare generation quality across epochs.",
+        "sampler_name": "Diffusion sampler algorithm (e.g., euler, euler_ancestral, dpm_2)."
+    },
+    "sampler": {
+        "title": "Native Preview Sampler",
+        "desc": "Automatically generate preview images during training without external tools.",
+        "sample_every_n_epochs": "Sample Every N Epochs",
+        "sample_every_n_steps": "Sample Every N Steps (0 to disable)",
+        "sample_prompt": "Sample Prompt",
+        "guidance_scale": "Guidance Scale (CFG)",
+        "width": "Image Width",
+        "height": "Image Height",
+        "seed": "Random Seed",
+        "sampler_name": "Sampler Algorithm"
     },
     "diagnostics": {
         "title": "System Diagnostics",
