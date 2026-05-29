@@ -364,6 +364,9 @@ if __name__ == '__main__':
     elif model_type == 'ernie_image':
         from models import ernie_image
         model = ernie_image.ErnieImagePipeline(config)
+    elif model_type == 'ltx2':
+        from models import ltx2
+        model = ltx2.LTX2Pipeline(config)
     else:
         raise NotImplementedError(f'Model type {model_type} is not implemented')
 
@@ -594,7 +597,7 @@ if __name__ == '__main__':
     parameters_to_train = [p for p in pipeline_model.parameters() if p.requires_grad]
 
     if config['compile']:
-        pipeline_model.compile()
+        pipeline_model.compile(dynamic=True)
 
     model_engine, optimizer, _, _ = deepspeed.initialize(
         args=args,

@@ -220,12 +220,11 @@ export function ModelTrainingPage({
                 'activation_checkpointing', 'pipeline_stages', 'blocks_to_swap',
                 'caching_batch_size', 'save_every_n_epochs', 'checkpoint_every_n_minutes',
                 'disable_block_swap_for_eval', 'gradient_clipping', 'lr_scheduler',
-                'save_every_n_steps', 'eval_every_n_steps',
-                'checkpoint_every_n_epochs', 'max_steps',
+                'eval_every_n_steps',
                 // Added missing keys
                 'video_clip_mode', 'eval_micro_batch_size_per_gpu', 'eval_gradient_accumulation_steps',
-                'eval_every_n_epochs', 'eval_before_first_step', 'pseudo_huber_c',
-                'map_num_proc', 'steps_per_print', 'force_constant_lr',
+                'eval_every_n_epochs', 'eval_before_first_step',
+                'steps_per_print',
                 'image_micro_batch_size_per_gpu', 'image_eval_micro_batch_size_per_gpu'
             ];
 
@@ -253,6 +252,15 @@ export function ModelTrainingPage({
 
             // Advanced data could be mixed in top-level
             const advUpdate: any = {};
+            const advancedKeys = [
+                'max_steps', 'force_constant_lr', 'pseudo_huber_c', 'map_num_proc',
+                'save_every_n_steps', 'checkpoint_every_n_epochs', 'partition_split'
+            ];
+            advancedKeys.forEach(key => {
+                if (importedConfig[key] !== undefined) {
+                    advUpdate[key] = importedConfig[key];
+                }
+            });
             if (importedConfig.min_snr_gamma !== undefined) advUpdate.min_snr_gamma = importedConfig.min_snr_gamma;
             if (importedConfig.compile !== undefined) advUpdate.compile = importedConfig.compile;
             if (importedConfig.x_axis_examples !== undefined) advUpdate.x_axis_examples = importedConfig.x_axis_examples;
@@ -385,7 +393,7 @@ export function ModelTrainingPage({
         }
 
         // Prune redundant parameters for non-video models
-        const isVideoModel = ['hunyuan_video', 'ltx_video', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelData.model_type || '');
+        const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelData.model_type || '');
         if (!isVideoModel) {
             delete fullConfig.video_clip_mode;
         }
@@ -692,6 +700,18 @@ export function ModelTrainingPage({
                         lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
                         lines.push(`llm_path = '${(m.llm_path || '').replace(/\\/g, '/')}'`);
                         lines.push(`llm_adapter_lr = ${formatValue(m.llm_adapter_lr ?? 0)}`);
+                        break;
+
+                    case 'ltx2':
+                        lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
+                        lines.push(`text_encoder = '${(m.text_encoder ?? m.text_encoder_path ?? '').replace(/\\/g, '/')}'`);
+                        lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype || m.transformer_dtype || 'float8'}'`);
+                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        lines.push(`shift = ${formatValue(m.shift ?? 1)}`);
+                        if (m.merge_adapters) {
+                            const adapters = Array.isArray(m.merge_adapters) ? m.merge_adapters : [m.merge_adapters];
+                            lines.push(`merge_adapters = [${adapters.map((a: string) => `'${a.replace(/\\/g, '/')}'`).join(', ')}]`);
+                        }
                         break;
 
                     default:

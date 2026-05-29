@@ -36,6 +36,8 @@ const DEFAULT_CONFIG = {
     cache_shuffle_num: 0,
     cache_shuffle_delimiter: ', ',
     mask_path: '',
+    // Skip images without caption file (default true: skip)
+    skip_empty_caption: 'true',
     // Multi-dataset support for training
     train_sets: [] as { input_path: string, num_repeats: number, control_paths: string[], mask_path: string }[]
 };
@@ -68,7 +70,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
     const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const isFirstRender = useRef(true);
 
-    const isVideoModel = ['hunyuan_video', 'ltx_video', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelType || '');
+    const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelType || '');
     const isEditingModel = modelType === 'flux_kontext' || modelType === 'qwen2511' || modelType === 'flux2' ||
         (modelType === 'qwen_image' && ['qwen_edit', 'qwen_2509'].includes(modelVersion || ''));
 
@@ -141,6 +143,11 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                 // Shuffle settings
                 cache_shuffle_num: importedConfig.cache_shuffle_num ?? prev.cache_shuffle_num,
                 cache_shuffle_delimiter: importedConfig.cache_shuffle_delimiter ?? prev.cache_shuffle_delimiter,
+                skip_empty_caption: String(
+                    importedConfig.directory?.[0]?.skip_empty_caption
+                    ?? importedConfig.skip_empty_caption
+                    ?? true
+                ),
                 // Mask path from first directory
                 mask_path: importedConfig.directory?.[0]?.mask_path || prev.mask_path,
                 // Load additional training sets
@@ -370,6 +377,11 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                     if (formData.cache_shuffle_delimiter && formData.cache_shuffle_delimiter !== ', ') {
                         trainLines.push(`cache_shuffle_delimiter = '${formData.cache_shuffle_delimiter}'`);
                     }
+                }
+
+                // Only write when user opts out of the default skip behavior
+                if (formData.skip_empty_caption === 'false') {
+                    trainLines.push(`skip_empty_caption = false`);
                 }
 
                 // Main dataset
@@ -752,6 +764,17 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                         <div className="col-span-2 pt-4 border-t border-white/10">
                             <h4 className="text-lg font-bold mb-4">{t('dataset.shuffle_mask_section')}</h4>
                             <div className="grid gap-4 md:grid-cols-2">
+                                <GlassSelect
+                                    label={t('dataset.skip_empty_caption')}
+                                    helpText={t('help.skip_empty_caption')}
+                                    name="skip_empty_caption"
+                                    value={formData.skip_empty_caption}
+                                    onChange={handleChange}
+                                    options={[
+                                        { label: t('dataset.skip_empty_caption_on'), value: 'true' },
+                                        { label: t('dataset.skip_empty_caption_off'), value: 'false' }
+                                    ]}
+                                />
                                 <GlassInput
                                     label={t('dataset.cache_shuffle_num')}
                                     helpText={t('help.cache_shuffle_num')}

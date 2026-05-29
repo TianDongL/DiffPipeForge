@@ -26,7 +26,7 @@
 |Qwen-Image-Edit-2512 |✅    |✅              |✅                |
 |Flux 2（both dev and klein）          |✅    |✅              |✅                |
 |Anima           |✅    |✅              |✅                |
-
+|LTX 2.3         |✅    |❌              |✅                |
 
 ## SDXL
 ```
@@ -645,3 +645,25 @@ shift = 3  # 可能适用于任何带有Flux2 VAE的模型
 ```
 
 使用与ComfyUI兼容的模型文件。LoRA以ComfyUI格式保存。
+
+## LTX 2.3
+```
+[model]
+type = 'ltx2'
+diffusion_model = '/data2/imagegen_models/comfyui-models/ltx-2.3-22b-dev.safetensors'
+text_encoder = '/data2/imagegen_models/comfyui-models/gemma_3_12B_it_fp4_mixed.safetensors'
+dtype = 'bfloat16'
+diffusion_model_dtype = 'float8'
+timestep_sample_method = 'logit_normal'
+shift = 1
+```
+
+当前仅支持 LTX 2.3。目前仅支持无音频的文生图、文生视频训练，音频与图生视频功能将在后续上线。
+
+请使用兼容 ComfyUI 的模型文件。文本编码器可采用任意 safetensors 权重格式（如 fp4 混合精度格式），扩散模型则必须使用完整的 bf16 非蒸馏检查点。
+
+目前暂未明确 shift 参数的标准取值。我曾使用 shift=1 完成一次测试，效果尚可，但该参数或许应设置为大于 1 的数值。
+
+该模型中 `blocks_to_swap = 46` 为最大取值。在此配置下，若分辨率、视频时长以及 LoRA 秩数均设为较低值，模型勉强可在 24GB 显存中运行。该模型更推荐使用更大显存，或是搭配多显卡与流水线并行方案运行。
+
+LoRA 文件将以 ComfyUI 格式保存。技术上支持全量微调，但该操作仅会保存扩散模型，不会生成整合型检查点文件（整合文件包含变分自编码器、音频声码器等组件）。受限于显存不足，我暂无法测试全量微调功能。

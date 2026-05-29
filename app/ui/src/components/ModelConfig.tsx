@@ -105,6 +105,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
         { label: 'Flux Kontext', value: 'flux_kontext' },
         { label: 'Flux 2', value: 'flux2' },
         { label: 'LTX Video', value: 'ltx_video' },
+        { label: 'LTX 2.3', value: 'ltx2' },
         { label: 'Hunyuan Video', value: 'hunyuan_video' },
         { label: 'Hunyuan Video 1.5', value: 'hunyuan_video_15' },
         { label: 'Hunyuan Image 2.1', value: 'hunyuan_image' },
@@ -143,6 +144,8 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                 return { ...base, transformer_dtype: 'float8', flux_shift: false };
             case 'ltx_video':
                 return { ...base, timestep_sample_method: 'logit_normal' };
+            case 'ltx2':
+                return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal', shift: 1 };
             case 'hunyuan_video':
                 return { ...base, transformer_dtype: 'float8', timestep_sample_method: 'logit_normal' };
             case 'cosmos':
@@ -639,6 +642,18 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={[{ label: t('common.optional'), value: '' }, ...TRANSFORMER_DTYPE_OPTIONS]} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 3)} onChange={handleChange} />
+                    </>
+                );
+
+            case 'ltx2':
+                return (
+                    <>
+                        <PathInput label={t('model.diffusion_model')} helpText={t('help.diffusion_model')} name="diffusion_model" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="ltx-2.3-22b-dev.safetensors" />
+                        <PathInput label={`${t('model.text_encoder_path')} (Gemma 3 12B)`} helpText={t('help.text_encoder_path')} name="text_encoder" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="gemma_3_12B_it_fp4_mixed.safetensors" />
+                        <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={TRANSFORMER_DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
+                        <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 1)} onChange={handleChange} />
                     </>
                 );
 

@@ -16,7 +16,7 @@ export interface TrainingConfigProps {
 export function TrainingConfig({ data, modelType, onChange, validationEnabled = true }: TrainingConfigProps) {
     const { t } = useTranslation();
 
-    const isVideoModel = ['hunyuan_video', 'ltx_video', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelType || '');
+    const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelType || '');
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         onChange({ ...data, [e.target.name]: e.target.value });

@@ -380,7 +380,10 @@
         "cache_shuffle_num": "标签打乱版本数",
         "cache_shuffle_delimiter": "标签分隔符",
         "mask_path": "遮罩图片路径",
-        "mask_path_placeholder": "C:\\path\\to\\your\\masks"
+        "mask_path_placeholder": "C:\\path\\to\\your\\masks",
+        "skip_empty_caption": "无打标文件处理",
+        "skip_empty_caption_on": "跳过无打标图片（默认）",
+        "skip_empty_caption_off": "保留并使用空打标"
     },
     "model": {
         "title": "模型配置",
@@ -696,7 +699,8 @@
         "llm_adapter_lr": "适配器的学习率。这是一个在将 LLM 嵌入输入扩散模型之前对其进行处理的适配器。设置为 0 将禁用其训练。这可能会使小数据集的训练更加稳定。如果你有一个较大的数据集或许多全新的概念，可以尝试训练 llm_adapter 看看是否有帮助",
         "cache_shuffle_num": "缓存的标签打乱版本数。若大于 0，则会为每张图片生成多个随机打乱标签顺序的版本用于训练，增加泛化性。仅适用于标签式的 Caption（如 Danbooru 风格），不适用于自然语言描述。",
         "cache_shuffle_delimiter": "标签分隔符。用于识别并分割 Caption 中的标签，默认为英文逗号+空格 ',' 。",
-        "mask_path": "遮罩图片文件夹路径。遮罩用于指定图片中需要关注或忽略的区域，训练时将根据遮罩调整损失计算权重。白色是重点训练，黑色是不训练，灰色是训练权重减半。"
+        "mask_path": "遮罩图片文件夹路径。遮罩用于指定图片中需要关注或忽略的区域，训练时将根据遮罩调整损失计算权重。白色是重点训练，黑色是不训练，灰色是训练权重减半。",
+        "skip_empty_caption": "当图片在数据集目录中没有对应的 .txt 打标文件，且 captions.json 中也没有对应条目时的处理方式。默认为「跳过」：不将该图片纳入训练。若切换为「保留并使用空打标」，则会使用空字符串作为该图片的 Caption 参与训练。"
     },
     "diagnostics": {
         "title": "系统诊断",

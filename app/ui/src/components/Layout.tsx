@@ -558,11 +558,9 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
                             />
                         </div>
                         <div style={{ display: activeTab === 'training_run' ? 'block' : 'none' }}>
-                            {activeTab === 'training_run' && (
-                                <TrainingLauncherPage
-                                    projectPath={projectPath}
-                                />
-                            )}
+                            <TrainingLauncherPage
+                                projectPath={projectPath}
+                            />
                         </div>
                         <div style={{ display: activeTab === 'monitor' ? 'block' : 'none' }}>
                             <MonitorPage
