@@ -845,6 +845,8 @@ async def start_training(payload: dict[str, Any]):
         spawn_exe = str(deepspeed if deepspeed.exists() else "deepspeed")
         spawn_args = [f"--num_gpus={payload.get('num_gpus') or 1}"] + python_args
 
+    local_size = str(payload.get("num_gpus") or 1) if is_linux else "1"
+
     current_log_file_path = None
     training_log_queue = []
     log_buffer: list[str] = []
@@ -858,10 +860,18 @@ async def start_training(payload: dict[str, Any]):
         cwd=str(script_path.parent),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
+        env={
+            **os.environ,
+            "LOCAL_SIZE": local_size,
+            "LOCAL_WORLD_SIZE": local_size,
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUNBUFFERED": "1",
+        },
         creationflags=creationflags,
         start_new_session=os.name != "nt",
     )
+    await broadcast("training-status", {"type": "started", "running": True, "pid": training_process.pid})
 
     async def watch() -> None:
         global training_process
@@ -871,7 +881,8 @@ async def start_training(payload: dict[str, Any]):
         await asyncio.gather(read_stream_lines(proc.stdout, lambda line: training_reader(line, log_buffer)), read_stream_lines(proc.stderr, lambda line: training_reader(line, log_buffer)))
         code = await proc.wait()
         training_process = None
-        await broadcast("training-status", {"type": "finished", "code": code})
+        status_type = "finished" if code == 0 else "error"
+        await broadcast("training-status", {"type": status_type, "code": code, "running": False})
 
     asyncio.create_task(watch())
     if base_output_dir:

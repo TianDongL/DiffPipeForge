@@ -48,6 +48,10 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
         checkStatus();
 
         const handleStatus = (_event: any, status: any) => {
+            if (typeof status.running === 'boolean') {
+                setIsTraining(status.running);
+                return;
+            }
             if (status.type === 'started') setIsTraining(true);
             if (status.type === 'finished' || status.type === 'error') setIsTraining(false);
         };
@@ -57,6 +61,21 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
             removeStatus();
         };
     }, []);
+
+    useEffect(() => {
+        if (!isTraining) return;
+
+        const timer = setInterval(async () => {
+            try {
+                const status = await ipc.invoke('get-training-status');
+                if (!status.running) setIsTraining(false);
+            } catch (e) {
+                console.error("Failed to refresh training status:", e);
+            }
+        }, 3000);
+
+        return () => clearInterval(timer);
+    }, [isTraining]);
 
     // Load saved launcher params for this project
     useEffect(() => {

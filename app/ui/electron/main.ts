@@ -2238,6 +2238,8 @@ enable_ar_bucket = true
           console.log(`[Training] [Linux] Using deepspeed launcher: ${spawnExe}`);
         }
 
+        const localSize = isLinux ? String(numGpus || 1) : '1';
+
         const timestamp = new Date().toLocaleString();
         const quoteIfSpace = (s: string) => s.includes(' ') ? `"${s}"` : s;
         const normalizedExe = spawnExe.replace(/\\/g, '/');
@@ -2274,11 +2276,15 @@ enable_ar_bucket = true
           detached: process.platform !== 'win32', // Needed for process group killing on Linux
           env: {
             ...process.env,
+            LOCAL_SIZE: localSize,
+            LOCAL_WORLD_SIZE: localSize,
             PYTHONUTF8: '1',
             PYTHONIOENCODING: 'utf-8',
             PYTHONUNBUFFERED: '1'
           }
         });
+
+        _event.sender.send('training-status', { type: 'started', running: true, pid: trainingProcess.pid });
 
         // Robust log reader with encoding support (GBK fallback for Windows)
         let stdoutLineBuffer = '';
@@ -2375,13 +2381,14 @@ enable_ar_bucket = true
         trainingProcess.on('close', (code) => {
           console.log(`[Training] Exited with code ${code}`);
           trainingProcess = null;
-          _event.sender.send('training-status', { type: 'finished', code });
+          const statusType = code === 0 ? 'finished' : 'error';
+          _event.sender.send('training-status', { type: statusType, code, running: false });
         });
 
         trainingProcess.on('error', (err) => {
           console.error(`[Training] Spawn error: ${err}`);
           trainingProcess = null;
-          _event.sender.send('training-status', { type: 'error', message: err.message });
+          _event.sender.send('training-status', { type: 'error', message: err.message, running: false });
         });
 
         resolve({ success: true, pid: trainingProcess.pid });

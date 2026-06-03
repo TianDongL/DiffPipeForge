@@ -126,7 +126,17 @@ export function TrainingLogViewer({ projectPath, showTitle = true, integrated = 
         };
 
         const handleStatus = (_event: any, status: any) => {
-            if (status.type === 'finished' || status.type === 'error') {
+            if (typeof status.running === 'boolean') {
+                setIsTraining(status.running);
+                if (!status.running) {
+                    setSpeed(null);
+                    fetchSessions();
+                } else {
+                    setSpeed(null);
+                    setSelectedSessionId('current');
+                    setTimeout(() => fetchSessions(), 7000);
+                }
+            } else if (status.type === 'finished' || status.type === 'error') {
                 setIsTraining(false);
                 setSpeed(null);
                 fetchSessions();
@@ -148,6 +158,25 @@ export function TrainingLogViewer({ projectPath, showTitle = true, integrated = 
             removeSpeed();
         };
     }, [selectedSessionId]);
+
+    useEffect(() => {
+        if (!isTraining) return;
+
+        const timer = setInterval(async () => {
+            try {
+                const status = await ipc.invoke('get-training-status');
+                if (!status.running) {
+                    setIsTraining(false);
+                    setSpeed(null);
+                    fetchSessions();
+                }
+            } catch (e) {
+                console.error("Failed to refresh training status:", e);
+            }
+        }, 3000);
+
+        return () => clearInterval(timer);
+    }, [isTraining]);
 
     const handleStopTraining = async () => {
         try {
