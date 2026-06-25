@@ -28,6 +28,7 @@
 |Anima           |✅    |✅              |✅                |
 |LTX 2.3         |✅    |❌              |✅                |
 |Ideogram4       |✅    |✅              |✅                |
+|Krea 2          |✅    |✅              |✅                |
 
 ## SDXL
 ```
@@ -679,3 +680,19 @@ timestep_sample_method = 'logit_normal'
 shift = 3
 ```
 该配置可在 24GB 显存环境下训练 LoRA 模型，模型将以 ComfyUI 格式保存。
+
+
+## Krea 2
+```
+[model]
+type = 'krea2'
+diffusion_model = '/data2/imagegen_models/comfyui-models/krea2_raw.safetensors'
+vae = '/data2/imagegen_models/comfyui-models/qwen_image_vae.safetensors'
+text_encoders = [
+    {path = '/data2/imagegen_models/comfyui-models/qwen3vl_4b_bf16.safetensors', type = 'krea2'}
+]
+dtype = 'bfloat16'
+diffusion_model_dtype = 'float8'
+timestep_sample_method = 'logit_normal'
+```
+此配置可在 24GB 显存下以 512 分辨率训练 rank 32 的 LoRA。
