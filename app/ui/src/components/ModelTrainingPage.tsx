@@ -705,6 +705,16 @@ export function ModelTrainingPage({
                         lines.push(`llm_adapter_lr = ${formatValue(m.llm_adapter_lr ?? 0)}`);
                         break;
 
+                    case 'krea2': {
+                        lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
+                        lines.push(`vae = '${(m.vae ?? m.vae_path ?? '').replace(/\\/g, '/')}'`);
+                        lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype || m.transformer_dtype || 'float8'}'`);
+                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        const kreaTePath = (m.text_encoder_path ?? m.text_encoder ?? '') as string;
+                        lines.push(`text_encoders = [{ path = '${kreaTePath.replace(/\\/g, '/')}', type = 'krea2' }]`);
+                        break;
+                    }
+
                     case 'ltx2':
                         lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
                         lines.push(`text_encoder = '${(m.text_encoder ?? m.text_encoder_path ?? '').replace(/\\/g, '/')}'`);

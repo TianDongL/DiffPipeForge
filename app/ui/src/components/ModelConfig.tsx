@@ -124,6 +124,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
         { label: 'Ideogram4', value: 'ideogram4' },
         { label: 'Anima', value: 'anima' },
         { label: 'Ernie Image', value: 'ernie_image' },
+        { label: 'Krea 2', value: 'krea2' },
     ];
 
     const handleTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -187,6 +188,8 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                 return { ...base, llm_adapter_lr: 0 };
             case 'ernie_image':
                 return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal', shift: 3 };
+            case 'krea2':
+                return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal' };
             default:
                 return base;
         }
@@ -657,6 +660,18 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={[{ label: t('common.optional'), value: '' }, ...TRANSFORMER_DTYPE_OPTIONS]} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 3)} onChange={handleChange} />
+                    </>
+                );
+
+            case 'krea2':
+                return (
+                    <>
+                        <PathInput label={t('model.diffusion_model')} helpText={t('help.diffusion_model')} name="diffusion_model" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="krea2_raw.safetensors" />
+                        <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen_image_vae.safetensors" />
+                        <PathInput label={`${t('model.text_encoder_path')} (Qwen3-VL)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen3vl_4b_bf16.safetensors (type=krea2)" />
+                        <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={TRANSFORMER_DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                     </>
                 );
 
