@@ -71,7 +71,8 @@ const DEFAULT_ADAPTER_DATA = {
     adapter_type: 'lora',
     rank: 32,
     dtype: 'bfloat16',
-    dropout: 0.0
+    dropout: 0.0,
+    decompose_factor: 4
 };
 const DEFAULT_MONITORING_DATA = {
     enable_wandb: false,
@@ -206,6 +207,7 @@ export function ModelTrainingPage({
                     rank: a.rank,
                     dtype: a.dtype,
                     dropout: a.dropout ?? 0.0,
+                    decompose_factor: a.decompose_factor ?? 4,
                     init_from_existing: a.init_from_existing
                 }));
             } else if (importedConfig.adapter_arguments) {
@@ -673,6 +675,7 @@ export function ModelTrainingPage({
                     case 'flux2':
                     case 'z_image':
                     case 'hunyuan_video_15':
+                    case 'ideogram4':
                     case 'ernie_image':
                         lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
                         lines.push(`vae = '${(m.vae ?? m.vae_path ?? '').replace(/\\/g, '/')}'`);
@@ -681,7 +684,7 @@ export function ModelTrainingPage({
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
 
                         const tePath = m.text_encoder_path ?? m.text_encoder ?? m.Text_Encoder ?? '';
-                        const teType = m.model_type === 'z_image' ? 'lumina2' : (m.model_type === 'hunyuan_video_15' ? 'hunyuan_video_15' : 'flux2');
+                        const teType = m.model_type === 'z_image' ? 'lumina2' : (m.model_type === 'hunyuan_video_15' ? 'hunyuan_video_15' : (m.model_type === 'ideogram4' ? 'ideogram4' : 'flux2'));
 
                         if (m.model_type === 'hunyuan_video_15') {
                             const b5Path = m.byt5_path || '';
@@ -756,12 +759,17 @@ export function ModelTrainingPage({
                 lines.push('\n[adapter]');
                 lines.push(`type = '${adapterType}'`);
                 // Need to provide defaults if values are missing from state
-                const rank = fullConfig.adapter?.rank || 32;
+                const rank = fullConfig.adapter?.rank || (adapterType === 'lokr' ? 1000000 : 32);
                 const dtype = fullConfig.adapter?.dtype || 'bfloat16';
-                const dropout = fullConfig.adapter?.dropout ?? 0.0;
                 lines.push(`rank = ${Number(rank)}`);
+                if (adapterType === 'lokr') {
+                    lines.push(`decompose_factor = ${formatValue(fullConfig.adapter?.decompose_factor ?? 4)}`);
+                }
                 lines.push(`dtype = '${dtype}'`);
-                lines.push(`dropout = ${formatValue(dropout)}`);
+                if (adapterType !== 'lokr') {
+                    const dropout = fullConfig.adapter?.dropout ?? 0.0;
+                    lines.push(`dropout = ${formatValue(dropout)}`);
+                }
 
                 if (fullConfig.adapter?.init_from_existing) {
                     lines.push(`init_from_existing = '${fullConfig.adapter.init_from_existing.replace(/\\/g, '\\\\')}'`);

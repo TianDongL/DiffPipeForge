@@ -27,6 +27,7 @@
 |Flux 2（both dev and klein）          |✅    |✅              |✅                |
 |Anima           |✅    |✅              |✅                |
 |LTX 2.3         |✅    |❌              |✅                |
+|Ideogram4       |✅    |✅              |✅                |
 
 ## SDXL
 ```
@@ -599,7 +600,6 @@ shift = 3
 - 如果没有块交换，Dev需要至少48GB的VRAM用于LoRA训练，可能还需要大量的系统RAM。
 - Flux2 VAE有更多的通道，因此时间步长偏移值(shift )大于1是有用的。我不知道最好的值，但3似乎很好。
 - 确保你使用了正确的文本编码器。每个版本使用不同的text encoder。如果使用了错误的缓存，缓存仍将运行，但在尝试训练时会出现形状不匹配错误。
-- 文本编码器可以是fp8版本。不过，扩散模型应该是全量的。如果fp8扩散模型是纯格式的（可能是Klein），它也许能跑，但fp8_scaled/fp8_mixed肯定跑不起来。
 
 LoRA以ComfyUI格式保存。
 
@@ -622,10 +622,6 @@ llm_adapter_lr = 0
 - 你可以单独控制 llm_adapter 的学习率。这是一个在将 Qwen3 嵌入输入扩散模型之前对其进行处理的适配器。
   - 设置 `llm_adapter_lr=0` 会完全禁用其训练。这可能会使小数据集的训练更加稳定。
   - 如果你有一个较大的数据集或许多全新的概念，可以尝试训练 llm_adapter 看看是否有帮助。
-- **请注意：在预览版上训练的任何 LoRA 可能无法在正式版上正常工作**
-  - 请将其视为“临时 LoRA”，届时你可能需要重新训练。
-  - 底层模型仍在进行训练，最终权重将与预览版权重产生偏差。
-  - 如果你将 LoRA 上传到公共平台，请务必注明它是基于预览版训练的，以免用户因其在正式版上表现不佳而感到困惑。
 Anima LoRA 以 ComfyUI 格式保存。
 
 
@@ -660,10 +656,26 @@ shift = 1
 
 当前仅支持 LTX 2.3。目前仅支持无音频的文生图、文生视频训练，音频与图生视频功能将在后续上线。
 
-请使用兼容 ComfyUI 的模型文件。文本编码器可采用任意 safetensors 权重格式（如 fp4 混合精度格式），扩散模型则必须使用完整的 bf16 非蒸馏检查点。
+请使用兼容 ComfyUI 的模型文件。文本编码器可采用任意 safetensors 权重格式（如 fp4 混合精度格式）
 
 目前暂未明确 shift 参数的标准取值。我曾使用 shift=1 完成一次测试，效果尚可，但该参数或许应设置为大于 1 的数值。
 
 该模型中 `blocks_to_swap = 46` 为最大取值。在此配置下，若分辨率、视频时长以及 LoRA 秩数均设为较低值，模型勉强可在 24GB 显存中运行。该模型更推荐使用更大显存，或是搭配多显卡与流水线并行方案运行。
 
 LoRA 文件将以 ComfyUI 格式保存。技术上支持全量微调，但该操作仅会保存扩散模型，不会生成整合型检查点文件（整合文件包含变分自编码器、音频声码器等组件）。受限于显存不足，我暂无法测试全量微调功能。
+
+## Ideogram4
+```
+[model]
+type = 'ideogram4'
+diffusion_model = '/data2/imagegen_models/comfyui-models/ideogram4_fp8_scaled.safetensors'
+vae = '/home/anon/ComfyUI/models/vae/flux2-vae.safetensors'
+text_encoders = [
+    {path = '/data2/imagegen_models/comfyui-models/qwen3vl_8b_fp8_scaled.safetensors', type = 'ideogram4'}
+]
+dtype = 'bfloat16'
+diffusion_model_dtype = 'float8'
+timestep_sample_method = 'logit_normal'
+shift = 3
+```
+该配置可在 24GB 显存环境下训练 LoRA 模型，模型将以 ComfyUI 格式保存。

@@ -518,6 +518,7 @@
         "dtype": "Dtype",
         "init_from": "Init From Existing",
         "dropout": "Dropout",
+        "decompose_factor": "Decompose Factor",
         "fft_hint": "Tip: Full Fine-Tuning (FFT) mode is active. All model parameters will be trained; LoRA-specific settings are disabled."
     },
     "start_params": {
@@ -648,9 +649,11 @@
         "transformer_dtype": "Weight precision for the Transformer part. Flux supported float8 to save massive VRAM.",
         "timestep_sample_method": "Method to sample timesteps during training. logit_normal is common to focus on image details.",
         "model_type": "Select the loading architecture for the model based on your files (single file vs folder).",
-        "adapter_type": "Type of adapter. 'lora' is the standard choice. Delete or comment out the adapter section to perform Full Fine-Tuning (FFT).",
+        "adapter_type": "Adapter type. LoRA is the standard low-rank adapter; LoKr uses Kronecker decomposition for larger matrix updates with fewer parameters; None exports no adapter section for Full Fine-Tuning (FFT).",
         "rank": "The rank of LoRA. Higher values mean more parameters and better expressive power but risk overfitting and higher VRAM usage.",
+        "lokr_rank": "LoKr rank. Smaller ranks use low-rank decomposition; a very high value such as 1e6 makes LoKr use full-matrix updates instead of low-rank decomposition, increasing parameters and VRAM use.",
         "dropout": "The dropout probability for LoRA layers. Helps prevent overfitting by randomly 'dropping out' (setting to zero) a fraction of neurons during training. Recommended range: 0.0 to 0.1.",
+        "decompose_factor": "LoKr Kronecker decomposition factor. It controls how matrices are split. The example configuration usually uses 4; higher values make the decomposition finer and change the parameter layout.",
         "init_from_existing": "You can initialize the adapter weights from a previously trained adapter (e.g., a LoRA). Enter the path to the saved weights folder.",
         "lr": "Learning Rate, controls the step size at each update. Too large can cause training to diverge, while too small will make training extremely slow. Fine-tune based on your model and optimizer.",
         "weight_decay": "A regularization technique to prevent overfitting.",

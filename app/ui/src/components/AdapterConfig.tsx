@@ -15,7 +15,33 @@ export function AdapterConfig({ data, onChange }: AdapterConfigProps) {
     const { t } = useTranslation();
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-        onChange({ ...data, [e.target.name]: e.target.value });
+        const { name, value } = e.target;
+
+        if (name === 'adapter_type') {
+            if (value === 'lokr') {
+                onChange({
+                    ...data,
+                    adapter_type: value,
+                    rank: data.adapter_type === 'lokr' ? (data.rank ?? 1000000) : 1000000,
+                    decompose_factor: data.decompose_factor ?? 4,
+                    dtype: data.dtype ?? 'bfloat16'
+                });
+                return;
+            }
+
+            if (value === 'lora') {
+                onChange({
+                    ...data,
+                    adapter_type: value,
+                    rank: data.adapter_type === 'lora' ? (data.rank ?? 32) : 32,
+                    dropout: data.dropout ?? 0.0,
+                    dtype: data.dtype ?? 'bfloat16'
+                });
+                return;
+            }
+        }
+
+        onChange({ ...data, [name]: value });
     };
 
     const handlePickPath = async (name: string, isFolder: boolean = false) => {
@@ -59,6 +85,7 @@ export function AdapterConfig({ data, onChange }: AdapterConfigProps) {
 
     const adapterOptions = [
         { label: 'LoRA', value: 'lora' },
+        { label: 'LoKr', value: 'lokr' },
         { label: 'None (全量微调)', value: 'none' }
     ];
 
@@ -91,7 +118,7 @@ export function AdapterConfig({ data, onChange }: AdapterConfigProps) {
                 />
                 <GlassInput
                     label={t('adapter.rank')}
-                    helpText={t('help.rank')}
+                    helpText={data.adapter_type === 'lokr' ? t('help.lokr_rank') : t('help.rank')}
                     name="rank"
                     type="number"
                     value={data.rank ?? 32}
@@ -99,19 +126,32 @@ export function AdapterConfig({ data, onChange }: AdapterConfigProps) {
                     disabled={data.adapter_type === 'none'}
                     className={data.adapter_type === 'none' ? 'opacity-50' : ''}
                 />
-                <GlassInput
-                    label={t('adapter.dropout')}
-                    helpText={t('help.dropout')}
-                    name="dropout"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max="1"
-                    value={data.dropout ?? 0.0}
-                    onChange={handleChange}
-                    disabled={data.adapter_type === 'none'}
-                    className={data.adapter_type === 'none' ? 'opacity-50' : ''}
-                />
+                {data.adapter_type === 'lokr' ? (
+                    <GlassInput
+                        label={t('adapter.decompose_factor')}
+                        helpText={t('help.decompose_factor')}
+                        name="decompose_factor"
+                        type="number"
+                        step="1"
+                        min="1"
+                        value={data.decompose_factor ?? 4}
+                        onChange={handleChange}
+                    />
+                ) : (
+                    <GlassInput
+                        label={t('adapter.dropout')}
+                        helpText={t('help.dropout')}
+                        name="dropout"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="1"
+                        value={data.dropout ?? 0.0}
+                        onChange={handleChange}
+                        disabled={data.adapter_type === 'none'}
+                        className={data.adapter_type === 'none' ? 'opacity-50' : ''}
+                    />
+                )}
                 <GlassSelect
                     label={t('adapter.dtype')}
                     helpText={t('help.dtype')}
