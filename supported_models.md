@@ -142,7 +142,7 @@ vae_path = '/data2/imagegen_models/lumina-2-single-files/flux_vae.safetensors'
 dtype = 'bfloat16'
 lumina_shift = true
 ```
-See the [Lumina 2 example dataset config](../examples/recommended_lumina_dataset_config.toml) which shows how to add a caption prefix and contains the recommended resolution settings.
+See the [Lumina 2 example dataset config](./examples/recommended_lumina_dataset_config.toml) which shows how to add a caption prefix and contains the recommended resolution settings.
 
 In addition to LoRA, Lumina 2 supports full fine tuning. It can be fine tuned at 1024x1024 resolution on a single 24GB GPU. For FFT, delete or comment out the [adapter] block in the config. If doing FFT with 24GB VRAM, you will need to use an alternative optimizer to lower VRAM use:
 ```

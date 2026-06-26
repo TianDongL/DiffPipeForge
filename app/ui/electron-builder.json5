@@ -56,25 +56,11 @@
         "arch": ["x64"]
       },
       {
-        "target": "nsis",
-        "arch": ["x64"]
-      },
-      {
         "target": "7z",
         "arch": ["x64"]
       }
     ],
     "artifactName": "${productName}-${version}-Windows.${ext}"
-  },
-  "publish": {
-    "provider": "generic",
-    "url": "https://dp-update.oss-cn-beijing.aliyuncs.com/updates/"
-  },
-  "nsis": {
-    "oneClick": false,
-    "perMachine": false,
-    "allowToChangeInstallationDirectory": true,
-    "deleteAppDataOnUninstall": false
   },
   "mac": {
     "target": ["dmg"],

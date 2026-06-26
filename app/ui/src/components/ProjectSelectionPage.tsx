@@ -7,7 +7,6 @@ import { parse } from 'smol-toml';
 import { GlassButton } from './ui/GlassButton';
 import { GlassConfirmDialog } from './ui/GlassConfirmDialog';
 import { useGlassToast } from "./ui/GlassToast";
-import { UpdateChecker } from "./UpdateChecker";
 
 export interface ProjectSelectionPageProps {
     onSelect: (projectPath: string) => void;
@@ -163,10 +162,6 @@ export function ProjectSelectionPage({ onSelect }: ProjectSelectionPageProps) {
             {/* Background blobs */}
             <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-purple-500/20 rounded-full blur-[100px] animate-blob pointer-events-none" />
             <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-blue-500/20 rounded-full blur-[100px] animate-blob animation-delay-2000 pointer-events-none" />
-
-            <div className="absolute top-6 right-6 z-50">
-                <UpdateChecker />
-            </div>
 
             <div className="max-w-4xl w-full space-y-8 z-10 flex-1 flex flex-col justify-center">
                 <div className="text-center space-y-2">

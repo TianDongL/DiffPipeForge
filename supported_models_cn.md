@@ -142,7 +142,7 @@ vae_path = '/data2/imagegen_models/lumina-2-single-files/flux_vae.safetensors'
 dtype = 'bfloat16'
 lumina_shift = true
 ```
-参见[Lumina 2示例数据集配置](../examples/recommended_lumina_dataset_config.toml)，其中展示了如何添加标题前缀并包含推荐的分辨率设置。
+参见[Lumina 2示例数据集配置](./examples/recommended_lumina_dataset_config.toml)，其中展示了如何添加标题前缀并包含推荐的分辨率设置。
 
 除了LoRA之外，Lumina 2还支持全量微调。它可以在单个24GB GPU上以1024x1024分辨率进行微调。对于全量微调，删除或注释掉配置中的[adapter]块。如果在24GB显存下进行全量微调，你需要使用替代优化器来减少显存使用：
 ```

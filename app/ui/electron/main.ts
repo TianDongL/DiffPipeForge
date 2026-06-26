@@ -10,8 +10,6 @@ const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // @ts-ignore
-import { autoUpdater } from "electron-updater"
-// @ts-ignore
 import log from "electron-log"
 
 // --- Application Logging Setup ---
@@ -22,9 +20,6 @@ const APP_LOG_PATH = path.join(LOG_DIR, 'app.log');
 // Configure electron-log
 log.transports.file.level = "info"
 log.transports.file.resolvePath = () => APP_LOG_PATH
-autoUpdater.logger = log
-// @ts-ignore
-autoUpdater.logger.transports.file.level = "info"
 
 const resolveBackendPath = (subPath: string): string => {
   return path.join(APP_ROOT_DIR, 'app', subPath);
@@ -128,6 +123,35 @@ const saveSettings = (settings: AppSettings) => {
   }
 };
 
+// --- Persist install location for the patch installer ---
+// Users install by extracting a ZIP, so there is no installer-written registry
+// record of where the app lives. We write our own current directory to a single
+// fixed HKCU value on every launch (overwrite-in-place, so moving the folder
+// just refreshes it — it never accumulates). The lightweight Inno patch
+// installer reads this value to auto-detect the correct target directory.
+// See patch_installer.iss -> GetInstallDir().
+function recordInstallLocation() {
+  if (process.platform !== 'win32' || !app.isPackaged) return;
+  try {
+    // APP_ROOT_DIR is the folder containing "DiffPipe Forge.exe".
+    const installDir = APP_ROOT_DIR;
+    const child = spawn('reg', [
+      'add', 'HKCU\\Software\\DiffPipe Forge',
+      '/v', 'InstallDir',
+      '/t', 'REG_SZ',
+      '/d', installDir,
+      '/f'
+    ], { windowsHide: true });
+    child.on('error', (err) => console.error('[InstallDir] reg add failed:', err));
+    child.on('close', (code) => {
+      if (code === 0) console.log(`[InstallDir] Recorded install dir: ${installDir}`);
+      else console.error(`[InstallDir] reg add exited with code ${code}`);
+    });
+  } catch (e) {
+    console.error('[InstallDir] Failed to record install location:', e);
+  }
+}
+
 
 function createWindow() {
   console.log("createWindow called");
@@ -173,73 +197,8 @@ app.whenReady().then(() => {
   console.log("App is ready, creating window...");
   createWindow()
 
-  // --- Auto Updater Logic ---
-  // Disable auto downloading of updates
-  autoUpdater.autoDownload = false;
-
-  ipcMain.handle('check-for-updates', () => {
-    if (!app.isPackaged) {
-      console.log("[AutoUpdate] Not packaged, skipping update check");
-      return { status: 'dev' };
-    }
-    console.log("[AutoUpdate] Checking for updates...");
-    autoUpdater.checkForUpdatesAndNotify();
-    return { status: 'checking' };
-  });
-
-  ipcMain.handle('download-update', () => {
-    console.log("[AutoUpdate] User confirmed download, starting...");
-    autoUpdater.downloadUpdate();
-    return { success: true };
-  });
-
-  ipcMain.handle('quit-and-install', () => {
-    // Gracefully shutdown all child processes
-    console.log("[AutoUpdate] Preparing to restart for update...");
-    if (activeBackendProcess) {
-      // @ts-ignore
-      activeBackendProcess.kill();
-      activeBackendProcess = null;
-    }
-    if (activeTensorboardProcess) {
-      // @ts-ignore
-      activeTensorboardProcess.kill();
-      activeTensorboardProcess = null;
-    }
-    if (activeToolProcess) {
-      activeToolProcess.kill();
-      activeToolProcess = null;
-    }
-
-    // Disable silent install to show full installer UI (allows directory selection)
-    autoUpdater.quitAndInstall(false, true);
-  });
-
-  autoUpdater.on('checking-for-update', () => {
-    win?.webContents.send('update-status', { status: 'checking' });
-  });
-
-  autoUpdater.on('update-available', (info: any) => {
-    // Just notify, do not download automatically
-    win?.webContents.send('update-status', { status: 'available', info });
-  });
-
-  autoUpdater.on('update-not-available', (info: any) => {
-    win?.webContents.send('update-status', { status: 'not-available', info });
-  });
-
-  autoUpdater.on('error', (err: any) => {
-    console.error("[AutoUpdate] Error:", err);
-    win?.webContents.send('update-status', { status: 'error', error: err.message });
-  });
-
-  autoUpdater.on('download-progress', (progressObj: any) => {
-    win?.webContents.send('update-status', { status: 'downloading', progress: progressObj });
-  });
-
-  autoUpdater.on('update-downloaded', (info: any) => {
-    win?.webContents.send('update-status', { status: 'downloaded', info });
-  });
+  // Record where we are running from so the patch installer can find us.
+  recordInstallLocation()
 
 
   // Window controls

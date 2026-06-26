@@ -242,21 +242,6 @@ async def websocket_events(ws: WebSocket):
         clients.discard(ws)
 
 
-@channel("check-for-updates")
-def check_for_updates():
-    return {"status": "web-ui"}
-
-
-@channel("download-update")
-def download_update():
-    return {"success": False, "error": "WebUI does not support Electron auto update"}
-
-
-@channel("quit-and-install")
-def quit_and_install():
-    return {"success": False, "error": "WebUI does not support Electron auto update"}
-
-
 @channel("window-minimize")
 @channel("window-toggle-maximize")
 @channel("window-close")
