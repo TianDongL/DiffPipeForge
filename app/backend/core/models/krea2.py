@@ -2,22 +2,52 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.abspath(os.path.dirname(__file__)), '../submodules/ComfyUI'))
 
+from contextlib import contextmanager, nullcontext
+
 import torch
 from torch import nn
 import torch.nn.functional as F
 from einops import rearrange
+import peft
 
 from models.base import ComfyPipeline, make_contiguous, PreprocessMediaFile
-from utils.common import AUTOCAST_DTYPE, get_lin_function, time_shift
+from utils.common import AUTOCAST_DTYPE, get_lin_function, time_shift, is_main_process
 from utils.offloading import ModelOffloader
 import comfy.latent_formats
+import comfy.ops
 from comfy.ldm.flux.layers import timestep_embedding
+
+try:
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+except ImportError:
+    SDPBackend = None
+    sdpa_kernel = None
+
+
+@contextmanager
+def krea2_attention_context():
+    if os.name != 'nt' or AUTOCAST_DTYPE != torch.bfloat16 or sdpa_kernel is None:
+        with nullcontext():
+            yield
+        return
+
+    original_sdpa = comfy.ops.scaled_dot_product_attention
+
+    def efficient_sdpa(q, k, v, *args, **kwargs):
+        with sdpa_kernel([SDPBackend.EFFICIENT_ATTENTION]):
+            return torch.nn.functional.scaled_dot_product_attention(q, k, v, *args, **kwargs)
+
+    comfy.ops.scaled_dot_product_attention = efficient_sdpa
+    try:
+        yield
+    finally:
+        comfy.ops.scaled_dot_product_attention = original_sdpa
 
 
 class Krea2Pipeline(ComfyPipeline):
     name = 'krea2'
     checkpointable_layers = ['InitialLayer', 'TransformerLayer']
-    adapter_target_modules = ['SingleStreamBlock']
+    adapter_target_modules = ['SingleStreamBlock', 'TextFusionTransformer']
     keep_in_high_precision = ['first', 'last', 'tmlp', 'tproj', 'txtfusion', 'txtmlp']
     spatial_compression = 8
     channels = 16
@@ -28,6 +58,46 @@ class Krea2Pipeline(ComfyPipeline):
         self.is_video_vae = True
         self.latent_format = comfy.latent_formats.Wan21()
         self.offloader = ModelOffloader('dummy', [], 0, 0, True, torch.device('cuda'), False, debug=False)
+
+    # override this to target the txtmlp weights with LoRA
+    def configure_adapter(self, adapter_config):
+        target_model = self.diffusion_model
+        target_linear_modules = set()
+        for name, module in target_model.named_modules():
+            if (module.__class__.__name__ not in self.adapter_target_modules) and ('txtmlp' not in name):
+                continue
+            for full_submodule_name, submodule in module.named_modules(prefix=name):
+                if isinstance(submodule, nn.Linear):
+                    target_linear_modules.add(full_submodule_name)
+        target_linear_modules = list(target_linear_modules)
+
+        adapter_type = adapter_config['type']
+        if adapter_type == 'lora':
+            peft_config = peft.LoraConfig(
+                r=adapter_config['rank'],
+                lora_alpha=adapter_config['alpha'],
+                lora_dropout=adapter_config['dropout'],
+                bias='none',
+                target_modules=target_linear_modules,
+            )
+        elif adapter_type == 'lokr':
+            peft_config = peft.LoKrConfig(
+                r=adapter_config['rank'],
+                decompose_factor=adapter_config['decompose_factor'],
+                alpha=adapter_config['alpha'],
+                rank_dropout=adapter_config['rank_dropout'],
+                target_modules=target_linear_modules,
+            )
+        else:
+            raise NotImplementedError(f'Adapter type {adapter_type} is not implemented')
+        self.peft_config = peft_config
+        self.lora_model = peft.get_peft_model(target_model, peft_config)
+        if is_main_process():
+            self.lora_model.print_trainable_parameters()
+        for name, p in target_model.named_parameters():
+            p.original_name = name
+            if p.requires_grad:
+                p.data = p.data.to(adapter_config['dtype'])
 
     def get_preprocess_media_file_fn(self):
         return PreprocessMediaFile(
@@ -152,9 +222,6 @@ class InitialLayer(nn.Module):
 
     @torch.autocast('cuda', dtype=AUTOCAST_DTYPE)
     def forward(self, inputs):
-        for item in inputs:
-            if torch.is_floating_point(item):
-                item.requires_grad_(True)
         x, timesteps, context, attention_mask = inputs
         b5, c5, t5, h5, w5 = x.shape
         x = x.reshape(b5 * t5, c5, h5, w5)
@@ -175,7 +242,8 @@ class InitialLayer(nn.Module):
         t = self.tmlp(timestep_embedding(timesteps, self.tdim).unsqueeze(1).to(img.dtype))
         tvec = self.tproj(t)
 
-        context = self.txtfusion(context, mask=None)
+        with krea2_attention_context():
+            context = self.txtfusion(context, mask=None)
         context = self.txtmlp(context)
 
         txtlen, imglen = context.shape[1], img.shape[1]
@@ -198,7 +266,12 @@ class InitialLayer(nn.Module):
 
         freqs = self.pe_embedder(pos)
 
-        return make_contiguous(combined, t, tvec, freqs, attention_mask, sizes)
+        outputs = make_contiguous(combined, t, tvec, freqs, attention_mask, sizes)
+        for item in outputs:
+            if torch.is_floating_point(item):
+                item.requires_grad_(True)
+
+        return outputs
 
 
 class TransformerLayer(nn.Module):
@@ -213,7 +286,8 @@ class TransformerLayer(nn.Module):
         combined, t, tvec, freqs, attention_mask, sizes = inputs
 
         self.offloader.wait_for_block(self.block_idx)
-        combined = self.layer(combined, tvec, freqs, attention_mask)
+        with krea2_attention_context():
+            combined = self.layer(combined, tvec, freqs, attention_mask)
         self.offloader.submit_move_blocks_forward(self.block_idx)
 
         return make_contiguous(combined, t, tvec, freqs, attention_mask, sizes)
