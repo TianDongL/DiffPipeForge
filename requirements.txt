@@ -13,7 +13,7 @@ tqdm
 safetensors
 # bitsandbytes
 imageio[ffmpeg]
-av
+av>=16.0.0
 einops
 accelerate
 loguru
@@ -44,6 +44,6 @@ qwen-vl-utils
 modelscope
 huggingface_hub
 alibabacloud_oss_v2
-comfy-kitchen
-comfy-aimdo
+comfy-kitchen==0.2.26
+comfy-aimdo==0.4.11
 scipy

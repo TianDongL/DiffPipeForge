@@ -76,6 +76,10 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
     const { t } = useTranslation();
     const [modelType, setModelType] = useState('sdxl');
     const [qwenVariant, setQwenVariant] = useState<'qwen_image' | 'qwen_edit' | 'qwen_2509' | 'qwen_2511' | 'qwen_2512'>('qwen_image');
+    const optionalDiffusionDtypeOptions = [
+        { label: t('model_load.native_checkpoint'), value: '' },
+        ...TRANSFORMER_DTYPE_OPTIONS
+    ];
 
     // Initialize default if empty / Sync internal state with props
     // Initialize default if empty / Sync internal state with props
@@ -125,6 +129,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
         { label: 'Anima', value: 'anima' },
         { label: 'Ernie Image', value: 'ernie_image' },
         { label: 'Krea 2', value: 'krea2' },
+        { label: 'MiniMax H3', value: 'minimax_h3' },
     ];
 
     const handleTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -190,6 +195,8 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                 return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal', shift: 3 };
             case 'krea2':
                 return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal' };
+            case 'minimax_h3':
+                return { ...base, diffusion_model_dtype: '', timestep_sample_method: 'uniform', shift: 8 };
             default:
                 return base;
         }
@@ -597,7 +604,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.text_encoder_path')} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen_3_4b.safetensors (type=lumina2)" />
                         <PathInput label={t('model.merge_adapters')} helpText={t('help.merge_adapters')} name="merge_adapters" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder={`${t('common.optional')} (Turbo) zimage_turbo_training_adapter_v1.safetensors`} />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
-                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || ''} onChange={handleChange} options={[{ label: t('common.optional'), value: '' }, ...TRANSFORMER_DTYPE_OPTIONS]} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                     </>
                 );
 
@@ -609,7 +616,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={`${t('model.text_encoder_path')} (Qwen)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen_2.5_vl_7b.safetensors" />
                         <PathInput label={`${t('model.byt5_path')} (ByT5)`} helpText={t('help.byt5_path')} name="byt5_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="byt5_small_glyphxl_fp16.safetensors" />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
-                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={TRANSFORMER_DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 1)} onChange={handleChange} />
                     </>
@@ -622,7 +629,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="flux2-vae.safetensors" />
                         <PathInput label={`${t('model.text_encoder_path')} (Qwen)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen_3_4b.safetensors (type=flux2)" />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
-                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={TRANSFORMER_DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 3)} onChange={handleChange} />
                     </>
@@ -634,7 +641,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="flux2-vae.safetensors" />
                         <PathInput label={`${t('model.text_encoder_path')} (Qwen3-VL)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen3vl_8b_fp8_scaled.safetensors (type=ideogram4)" />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
-                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={TRANSFORMER_DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 3)} onChange={handleChange} />
                     </>
@@ -657,7 +664,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="flux2-vae.safetensors" />
                         <PathInput label={`${t('model.text_encoder_path')} (Ministral, type=flux2)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="ministral-3-3b.safetensors" />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
-                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={[{ label: t('common.optional'), value: '' }, ...TRANSFORMER_DTYPE_OPTIONS]} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 3)} onChange={handleChange} />
                     </>
@@ -670,7 +677,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen_image_vae.safetensors" />
                         <PathInput label={`${t('model.text_encoder_path')} (Qwen3-VL)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen3vl_4b_bf16.safetensors (type=krea2)" />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
-                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={TRANSFORMER_DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                     </>
                 );
@@ -681,9 +688,26 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.diffusion_model')} helpText={t('help.diffusion_model')} name="diffusion_model" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="ltx-2.3-22b-dev.safetensors" />
                         <PathInput label={`${t('model.text_encoder_path')} (Gemma 3 12B)`} helpText={t('help.text_encoder_path')} name="text_encoder" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="gemma_3_12B_it_fp4_mixed.safetensors" />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
-                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.transformer_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype || 'float8'} onChange={handleChange} options={TRANSFORMER_DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'logit_normal'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.shift')} name="shift" type="number" value={formatNum(data.shift ?? 1)} onChange={handleChange} />
+                    </>
+                );
+
+            case 'minimax_h3':
+                return (
+                    <>
+                        <PathInput label={t('model.diffusion_model')} helpText={t('help.diffusion_model')} name="diffusion_model" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="minimax_h3_fl2va_pruned_int8_convrot.safetensors" />
+                        <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="minimax_h3_video_vae_fp16.safetensors" />
+                        <PathInput label={t('model.audio_vae')} helpText={t('help.audio_vae')} name="audio_vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="minimax_h3_audio_vae_fp32.safetensors" />
+                        <PathInput label={`${t('model.text_encoder_path')} (Qwen3-VL)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen3vl_32b_minimax_h3_int8_convrot.safetensors" />
+                        <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
+                        <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
+                        <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'uniform'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
+                        <GlassInput label={t('model.shift')} helpText={t('help.minimax_shift')} name="shift" type="number" min="0.000001" value={formatNum(data.shift ?? 8)} onChange={handleChange} />
+                        <div className="col-span-2 rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-200">
+                            {t('help.minimax_audio')}
+                        </div>
                     </>
                 );
 

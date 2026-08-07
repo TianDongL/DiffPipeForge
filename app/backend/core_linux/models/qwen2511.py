@@ -746,7 +746,9 @@ class Qwen2511Pipeline(BasePipeline):
     def get_call_vae_fn(self, vae):
         def fn(*args):
             image = args[0]
-            latents = vae.encode(image.to(vae.device, vae.dtype)).latent_dist.mode()
+            image = image.to(vae.device, vae.dtype)
+            image = image*2 - 1
+            latents = vae.encode(image).latent_dist.mode()
             latents = (latents - vae.latents_mean_tensor) / vae.latents_std_tensor
             result = {'latents': latents}
             if len(args) == 2:
@@ -754,12 +756,18 @@ class Qwen2511Pipeline(BasePipeline):
                 if isinstance(control_data, list):
                     control_latents_list = []
                     for control_image in control_data:
-                        cl = vae.encode(control_image.to(vae.device, vae.dtype)).latent_dist.mode()
+                        control_image = control_image.to(vae.device, vae.dtype)
+                        control_image = control_image*2 - 1
+                        cl = vae.encode(control_image).latent_dist.mode()
                         cl = (cl - vae.latents_mean_tensor) / vae.latents_std_tensor
                         control_latents_list.append(cl)
-                    result['control_latents'] = control_latents_list
+                    # Keep the batch dimension first so the cache can unbatch by
+                    # sample without confusing control paths with audio lists.
+                    result['control_latents'] = torch.stack(control_latents_list, dim=1)
                 else:
-                    control_latents = vae.encode(control_data.to(vae.device, vae.dtype)).latent_dist.mode()
+                    control_data = control_data.to(vae.device, vae.dtype)
+                    control_data = control_data*2 - 1
+                    control_latents = vae.encode(control_data).latent_dist.mode()
                     control_latents = (control_latents - vae.latents_mean_tensor) / vae.latents_std_tensor
                     result['control_latents'] = control_latents
             return result
@@ -911,6 +919,8 @@ class Qwen2511Pipeline(BasePipeline):
 
         if 'control_latents' in inputs:
             control_data = inputs['control_latents']
+            if torch.is_tensor(control_data) and control_data.ndim == 6:
+                control_data = list(control_data.unbind(dim=1))
             if isinstance(control_data, list):
                 all_control_latents = []
                 for control_latents in control_data:

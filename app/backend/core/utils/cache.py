@@ -39,7 +39,11 @@ class Cache:
     def init(self):
         print('[CACHE] Initializing')
         # create database
-        self.con = sqlite3.connect(self.metadata_db)
+        try:
+            self.con = sqlite3.connect(self.metadata_db, autocommit=False)
+        except TypeError:
+            # Python 3.10/3.11 do not expose the autocommit keyword yet.
+            self.con = sqlite3.connect(self.metadata_db)
 
         # check fingerprint, clear cache if different
         self.con.execute('CREATE TABLE IF NOT EXISTS fingerprint(value)')

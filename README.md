@@ -30,7 +30,7 @@
 ## ✨ Key Features
 
 - **🚀 Extensive Model Support**: support for a wide range of architectures including:
-  - **Video Models**: LTX-Video, Hunyuan Video (1.0 & 1.5), Wan (2.1 & 2.2), Cosmos.
+  - **Video Models**: LTX-Video, Hunyuan Video (1.0 & 1.5), Wan (2.1 & 2.2), Cosmos, MiniMax H3.
   - **Image Models**: Flux (Dev/Schnell), SDXL, Lumina 2.0, SD3/3.5, Qwen-Image, Flux 2(dev/klein)
   - **Specialized Models**: Chroma, HiDream, OmniGen2, AuraFlow, Z-Image.
 - **📊 Advanced Dataset Management**:
@@ -49,6 +49,9 @@
   - Modern **Glassmorphism** design system.
   - Full support for **Dark Mode** and **Light Mode**.
   - **Multi-language** support (English & Chinese).
+
+> [!IMPORTANT]
+> After upgrading from the previous upstream baseline, regenerate latent caches for **Z-Image, Flux 2, and Ernie-Image**. Latent scaling now happens during caching, so old caches are incompatible. This update also adds MiniMax H3 audio training and direct LoRA training on supported quantized ComfyUI checkpoints.
 
 ## 🛠️ Project Structure
 
@@ -111,5 +114,6 @@ chmod +x start.sh
 For detailed configuration examples and model-specific notes, please refer to:
 - [Supported Models Guide](supported_models.md)
 - [支持模型指南 (简体中文)](supported_models_cn.md)
+- [MiniMax H3 Training Notes / 训练说明](minimax_h3_notes.md)
 - [Example Configuration Files](examples/)
 

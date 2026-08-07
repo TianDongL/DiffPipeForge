@@ -53,6 +53,7 @@ class WanModelFromSafetensors(WanModel):
 
 
 def vae_encode(tensor, vae):
+    tensor = tensor*2 - 1
     return vae.model.encode(tensor, vae.scale)
 
 
@@ -164,6 +165,7 @@ class WanPipeline(BasePipeline):
         elif model_type == 'ti2v':
             self.name = 'wan2.2_5b'
             self.framerate = 24
+            self.pixels_round_to_multiple = 32
             if model_dim == 3072:
                 wan_config = wan_configs.ti2v_5B
             else:

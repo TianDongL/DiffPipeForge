@@ -29,6 +29,7 @@
 |LTX 2.3         |✅    |❌              |✅                |
 |Ideogram4       |✅    |✅              |✅                |
 |Krea 2          |✅    |✅              |✅                |
+|MiniMax H3      |✅    |✅              |✅                |
 
 ## SDXL
 ```
@@ -302,7 +303,7 @@ transformer_dtype = 'float8'
 
 Flux Kontext is supported, both for standard t2i datasets and edit datasets. The weight shapes are 100% compatible with Flux Dev, so if you already have the Dev Diffusers folder you can use transformer_path to point to the Kontext single model file to save space.
 
-See the [Flux Kontext example dataset config](../examples/flux_kontext_dataset.toml) for how to configure the dataset.
+See the [Flux Kontext example dataset config](examples/flux_kontext_dataset.toml) for how to configure the dataset.
 
 **IMPORTANT**: The control/context images should be approximately the same aspect ratio as the target images. All of the aspect ratio and size bucketing is done with respect to the target images. Then, the control image is resized and cropped to match the target image size. If the aspect ratio of the control image is very different from the target image, it will be cropping away a lot of the control image.
 
@@ -385,7 +386,7 @@ pip install git+https://github.com/huggingface/diffusers
 Qwen-Image LoRAs are saved in ComfyUI format.
 
 ### Training LoRAs on a single 24GB GPU
-- You will need block swapping. See the [example 24GB VRAM config](../examples/qwen_image_24gb_vram.toml) which has everything set correctly.
+- You will need block swapping. See the [example 24GB VRAM config](examples/qwen_image_24gb_vram.toml) which has everything set correctly.
 - Use the expandable segments CUDA feature: ```PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True NCCL_P2P_DISABLE="1" NCCL_IB_DISABLE="1" deepspeed --num_gpus=1 train.py --deepspeed --config /home/anon/code/diffusion-pipe-configs/tmp.toml```
 - Use a dataset resolution of 640. This is one of the resolutions the model was trained with and might work a bit better than 512.
 - If you use higher LoRA rank or higher resolution, you might need to increase blocks_to_swap.
@@ -401,7 +402,7 @@ dtype = 'bfloat16'
 transformer_dtype = 'float8'
 timestep_sample_method = 'logit_normal'
 ```
-Configuring and training Qwen-Image-Edit is the same as Flux-Kontext. See the [example dataset config](../examples/flux_kontext_dataset.toml). The same dataset considerations apply. The reference images are resized to whatever size bucket the target images end up in, so your reference images need to have approximately the same aspect ratio as the targets, or else they will be overly cropped.
+Configuring and training Qwen-Image-Edit is the same as Flux-Kontext. See the [example dataset config](examples/flux_kontext_dataset.toml). The same dataset considerations apply. The reference images are resized to whatever size bucket the target images end up in, so your reference images need to have approximately the same aspect ratio as the targets, or else they will be overly cropped.
 
 The model is taking larger inputs than T2I training, so it is slower and uses more VRAM. I don't know if you can train it on 24GB VRAM. Maybe if you block swap enough.
 
@@ -570,7 +571,7 @@ pip install git+https://github.com/huggingface/diffusers
 Qwen-Image LoRAs are saved in ComfyUI format.
 
 ### Training LoRAs on a single 24GB GPU
-- You will need block swapping. See the [example 24GB VRAM config](../examples/qwen_image_24gb_vram.toml) which has everything set correctly.
+- You will need block swapping. See the [example 24GB VRAM config](examples/qwen_image_24gb_vram.toml) which has everything set correctly.
 - Use the expandable segments CUDA feature: ```PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True NCCL_P2P_DISABLE="1" NCCL_IB_DISABLE="1" deepspeed --num_gpus=1 train.py --deepspeed --config /home/anon/code/diffusion-pipe-configs/tmp.toml```
 - Use a dataset resolution of 640. This is one of the resolutions the model was trained with and might work a bit better than 512.
 - If you use higher LoRA rank or higher resolution, you might need to increase blocks_to_swap.
@@ -586,7 +587,7 @@ dtype = 'bfloat16'
 transformer_dtype = 'float8'
 timestep_sample_method = 'logit_normal'
 ```
-Configuring and training Qwen-Image-Edit is the same as Flux-Kontext. See the [example dataset config](../examples/flux_kontext_dataset.toml). The same dataset considerations apply. The reference images are resized to whatever size bucket the target images end up in, so your reference images need to have approximately the same aspect ratio as the targets, or else they will be overly cropped.
+Configuring and training Qwen-Image-Edit is the same as Flux-Kontext. See the [example dataset config](examples/flux_kontext_dataset.toml). The same dataset considerations apply. The reference images are resized to whatever size bucket the target images end up in, so your reference images need to have approximately the same aspect ratio as the targets, or else they will be overly cropped.
 
 The model is taking larger inputs than T2I training, so it is slower and uses more VRAM. I don't know if you can train it on 24GB VRAM. Maybe if you block swap enough.
 
@@ -748,3 +749,34 @@ diffusion_model_dtype = 'float8'
 timestep_sample_method = 'logit_normal'
 ```
 This configuration can train a rank 32 LoRA at 512 resolution with 24GB VRAM.
+
+## MiniMax H3
+
+```toml
+[model]
+type = 'minimax_h3'
+diffusion_model = '/data2/imagegen_models/comfyui-models/minimax_h3_fl2va_pruned_int8_convrot.safetensors'
+vae = '/data2/imagegen_models/comfyui-models/minimax_h3_video_vae_fp16.safetensors'
+audio_vae = '/data2/imagegen_models/comfyui-models/minimax_h3_audio_vae_fp32.safetensors'
+text_encoders = [
+    {path = '/data2/imagegen_models/comfyui-models/qwen3vl_32b_minimax_h3_int8_convrot.safetensors', type = 'minimax'}
+]
+dtype = 'bfloat16'
+timestep_sample_method = 'uniform'  # or 'logit_normal'
+shift = 8  # The optimal value is not yet known; 1 is much too low for video.
+```
+
+Use ComfyUI-format files for every component. Saved models and LoRAs are also in ComfyUI format. LoRAs can be trained directly on quantized weights; the upstream author recommends the int8 convrot diffusion model and text encoder because they are faster, use less VRAM, and preserve better quality. When training directly on quantized weights, leave `diffusion_model_dtype` unset. A quantized base model cannot be full fine-tuned; use a non-quantized model for full fine-tuning.
+
+Current limitations and behavior:
+
+- Only T2I and T2V training are supported. If a source video contains audio, its audio is trained automatically (effectively T2VA). Reference-image, edit, I2V, and first/last-frame conditioning training are not supported.
+- The training micro-batch size must be `1`. Use `gradient_accumulation_steps` to emulate a larger batch.
+- MiniMax H3 uses fixed 24 fps video preprocessing and 32 kHz audio. Videos without an audio track and image-only datasets are supported.
+- AdaLN weights are excluded from LoRA targets, so a LoRA remains compatible with both the full and pruned H3 checkpoints.
+- `blocks_to_swap = 48` is the maximum documented value. `activation_checkpointing = 'unsloth'` is also recommended for reducing VRAM use.
+- The ideal timestep distribution and shift are not yet known. `timestep_sample_method = 'uniform'` with `shift = 12` matches the default inference schedule; a lower value such as 8 may improve fine detail at the cost of large-scale structure and motion.
+- Training gradually undistills the model, so inference may require CFG. Image training is valid, but training exclusively on images can weaken the model's video and motion understanding.
+- The large text encoder can remain in system RAM after caching and may cause an out-of-memory error. If that happens, finish caching first, restart the application, and then begin training from the existing cache.
+
+Read the complete bilingual [MiniMax H3 training notes](minimax_h3_notes.md) before training.

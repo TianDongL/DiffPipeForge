@@ -44,6 +44,10 @@
       "to": "supported_models_cn.md"
     },
     {
+      "from": "../../minimax_h3_notes.md",
+      "to": "minimax_h3_notes.md"
+    },
+    {
       "from": "../../LICENSE",
       "to": "LICENSE"
     }

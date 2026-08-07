@@ -41,7 +41,7 @@ const DEFAULT_TRAINING_DATA = {
     pipeline_stages: 1,
     blocks_to_swap: 0,
     caching_batch_size: 1,
-    video_clip_mode: 'none',
+    video_clip_mode: 'single_beginning',
     steps_per_print: 1,
     save_every_n_epochs: 1,
     checkpoint_every_n_minutes: 120,
@@ -52,7 +52,7 @@ const DEFAULT_TRAINING_DATA = {
     eval_before_first_step: false,
     disable_block_swap_for_eval: false,
     image_micro_batch_size_per_gpu: undefined,
-    image_eval_micro_batch_size_per_gpu: undefined
+    eval_image_micro_batch_size_per_gpu: undefined
 };
 const DEFAULT_ADVANCED_DATA = {
     compile: false,
@@ -227,7 +227,7 @@ export function ModelTrainingPage({
                 'video_clip_mode', 'eval_micro_batch_size_per_gpu', 'eval_gradient_accumulation_steps',
                 'eval_every_n_epochs', 'eval_before_first_step',
                 'steps_per_print',
-                'image_micro_batch_size_per_gpu', 'image_eval_micro_batch_size_per_gpu'
+                'image_micro_batch_size_per_gpu', 'eval_image_micro_batch_size_per_gpu'
             ];
 
             trainKeys.forEach(key => {
@@ -245,6 +245,15 @@ export function ModelTrainingPage({
                     }
                 }
             });
+
+            // Migrate projects saved by older UI versions, which used the
+            // reversed field name that the backend never consumed.
+            if (
+                importedConfig.eval_image_micro_batch_size_per_gpu === undefined &&
+                importedConfig.image_eval_micro_batch_size_per_gpu !== undefined
+            ) {
+                tData.eval_image_micro_batch_size_per_gpu = importedConfig.image_eval_micro_batch_size_per_gpu;
+            }
 
             if (Object.keys(tData).length > 0) {
                 setTrainingData((prev: any) => ({ ...prev, ...tData }));
@@ -395,9 +404,11 @@ export function ModelTrainingPage({
         }
 
         // Prune redundant parameters for non-video models
-        const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelData.model_type || '');
+        const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos', 'minimax_h3'].includes(modelData.model_type || '');
         if (!isVideoModel) {
             delete fullConfig.video_clip_mode;
+        } else if (!['single_beginning', 'single_middle'].includes(fullConfig.video_clip_mode)) {
+            fullConfig.video_clip_mode = 'single_beginning';
         }
 
         return { fullConfig, trainConfigPath, datasetPath, evalDatasetPath };
@@ -512,7 +523,7 @@ export function ModelTrainingPage({
                 'partition_split', 'video_clip_mode', 'eval_micro_batch_size_per_gpu',
                 'eval_gradient_accumulation_steps', 'eval_every_n_epochs', 'eval_before_first_step',
                 'disable_block_swap_for_eval', 'image_micro_batch_size_per_gpu',
-                'image_eval_micro_batch_size_per_gpu'
+                'eval_image_micro_batch_size_per_gpu'
             ];
 
             const integerKeys = new Set([
@@ -520,7 +531,7 @@ export function ModelTrainingPage({
                 'blocks_to_swap', 'caching_batch_size', 'save_every_n_epochs', 'save_every_n_steps',
                 'eval_every_n_epochs', 'eval_every_n_steps', 'checkpoint_every_n_epochs',
                 'checkpoint_every_n_minutes', 'pipeline_stages', 'map_num_proc', 'steps_per_print',
-                'max_steps', 'image_micro_batch_size_per_gpu', 'image_eval_micro_batch_size_per_gpu',
+                'max_steps', 'image_micro_batch_size_per_gpu', 'eval_image_micro_batch_size_per_gpu',
                 'eval_micro_batch_size_per_gpu', 'eval_gradient_accumulation_steps'
             ]);
 
@@ -598,6 +609,7 @@ export function ModelTrainingPage({
                     case 'ltx_video':
                         lines.push(`diffusers_path = '${(m.diffusers_path || '').replace(/\\/g, '/')}'`);
                         lines.push(`single_file_path = '${(m.single_file_path || '').replace(/\\/g, '/')}'`);
+                        if (m.transformer_dtype) lines.push(`transformer_dtype = '${m.transformer_dtype}'`);
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
                         lines.push(`first_frame_conditioning_p = ${formatValue(m.first_frame_conditioning_p || 1.0)}`);
                         break;
@@ -680,7 +692,7 @@ export function ModelTrainingPage({
                         lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
                         lines.push(`vae = '${(m.vae ?? m.vae_path ?? '').replace(/\\/g, '/')}'`);
                         lines.push(`shift = ${formatValue(m.shift || 1)}`);
-                        lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype || m.transformer_dtype || 'bfloat16'}'`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
 
                         const tePath = m.text_encoder_path ?? m.text_encoder ?? m.Text_Encoder ?? '';
@@ -708,7 +720,7 @@ export function ModelTrainingPage({
                     case 'krea2': {
                         lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
                         lines.push(`vae = '${(m.vae ?? m.vae_path ?? '').replace(/\\/g, '/')}'`);
-                        lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype || m.transformer_dtype || 'float8'}'`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
                         const kreaTePath = (m.text_encoder_path ?? m.text_encoder ?? '') as string;
                         lines.push(`text_encoders = [{ path = '${kreaTePath.replace(/\\/g, '/')}', type = 'krea2' }]`);
@@ -718,7 +730,7 @@ export function ModelTrainingPage({
                     case 'ltx2':
                         lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
                         lines.push(`text_encoder = '${(m.text_encoder ?? m.text_encoder_path ?? '').replace(/\\/g, '/')}'`);
-                        lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype || m.transformer_dtype || 'float8'}'`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
                         lines.push(`shift = ${formatValue(m.shift ?? 1)}`);
                         if (m.merge_adapters) {
@@ -726,6 +738,18 @@ export function ModelTrainingPage({
                             lines.push(`merge_adapters = [${adapters.map((a: string) => `'${a.replace(/\\/g, '/')}'`).join(', ')}]`);
                         }
                         break;
+
+                    case 'minimax_h3': {
+                        lines.push(`diffusion_model = '${(m.diffusion_model || '').replace(/\\/g, '/')}'`);
+                        lines.push(`vae = '${(m.vae || '').replace(/\\/g, '/')}'`);
+                        lines.push(`audio_vae = '${(m.audio_vae || '').replace(/\\/g, '/')}'`);
+                        const minimaxTextEncoderPath = (m.text_encoder_path || '') as string;
+                        lines.push(`text_encoders = [{ path = '${minimaxTextEncoderPath.replace(/\\/g, '/')}', type = 'minimax' }]`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
+                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'uniform'}'`);
+                        lines.push(`shift = ${formatValue(m.shift ?? 8)}`);
+                        break;
+                    }
 
                     default:
                         // Fallback for unknown types

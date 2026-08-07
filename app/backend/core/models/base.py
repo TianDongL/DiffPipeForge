@@ -1,4 +1,5 @@
 from pathlib import Path
+import io
 import re
 import tarfile
 import os
@@ -9,13 +10,13 @@ sys.path.insert(0, os.path.join(os.path.abspath(os.path.dirname(__file__)), '../
 
 import peft
 import torch
+import torchaudio
 from torch import nn
 import torch.nn.functional as F
 import safetensors.torch
 import torchvision
 from PIL import Image, ImageOps
 from torchvision import transforms
-import imageio
 import accelerate
 from diffusers import FlowMatchEulerDiscreteScheduler
 from tqdm import tqdm
@@ -26,36 +27,16 @@ import comfy.sd
 import comfy.sd1_clip
 from comfy.sd1_clip import SD1Tokenizer
 from comfy import model_management
+from comfy_api.latest import InputImpl
+
 # Avoids using comfy_kitchen RoPE implementations that don't have backward defined
 model_management.in_training = True
+# Increase this from the default. I OOM on text embedding caching on Minimax without this.
+model_management.EXTRA_RESERVED_VRAM = 2000 * 1024 * 1024
 
 
 def make_contiguous(*tensors):
     return tuple(x.contiguous() for x in tensors)
-
-
-def extract_clips(video, target_frames, video_clip_mode):
-    # video is (channels, num_frames, height, width)
-    frames = video.shape[1]
-    if frames < target_frames:
-        # TODO: think about how to handle this case. Maybe the video should have already been thrown out?
-        print(f'video with shape {video.shape} is being skipped because it has less ({frames}) than the target_frames {target_frames}')
-        return []
-
-    if video_clip_mode == 'single_beginning':
-        return [video[:, :target_frames, ...]]
-    elif video_clip_mode == 'single_middle':
-        start = int((frames - target_frames) / 2)
-        assert frames-start >= target_frames
-        return [video[:, start:start+target_frames, ...]]
-    # elif video_clip_mode == 'multiple_overlapping':
-    #     # Extract multiple clips so we use the whole video for training.
-    #     # The clips might overlap a little bit. We never cut anything off the end of the video.
-    #     num_clips = ((frames - 1) // target_frames) + 1
-    #     start_indices = torch.linspace(0, frames-target_frames, num_clips).int()
-    #     return [video[:, i:i+target_frames, ...] for i in start_indices]
-    else:
-        raise NotImplementedError(f'video_clip_mode={video_clip_mode} is not recognized')
 
 
 def convert_crop_and_resize(pil_img, width_and_height):
@@ -74,27 +55,88 @@ def convert_crop_and_resize(pil_img, width_and_height):
 
 
 class PreprocessMediaFile:
-    def __init__(self, config, support_video=False, framerate=None, round_height=16, round_width=16, round_frames=4):
+    def __init__(self, config, support_video=False, support_audio=False, framerate=None, audio_sample_rate=None, round_height=16, round_width=16, round_frames=4):
         self.config = config
         self.video_clip_mode = config.get('video_clip_mode', 'single_beginning')
         print(f'using video_clip_mode={self.video_clip_mode}')
-        self.pil_to_tensor = transforms.Compose([transforms.ToTensor(), transforms.Normalize([0.5], [0.5])])
+        self.pil_to_tensor = transforms.Compose([transforms.ToTensor()])
         self.support_video = support_video
+        self.support_audio = support_audio
+        if self.support_audio:
+            self.support_video = True
         self.framerate = framerate
         print(f'using framerate={self.framerate}')
+        self.audio_sample_rate = audio_sample_rate
+        print(f'using audio_sample_rate={self.audio_sample_rate}')
         self.round_height = round_height
         self.round_width = round_width
         self.round_frames = round_frames
         if self.support_video:
             assert self.framerate
+        if self.support_audio:
+            assert self.audio_sample_rate
         self.tarfile_map = {}
 
     def __del__(self):
         for tar_f in self.tarfile_map.values():
             tar_f.close()
 
+    def align_frames(self, frames):
+        return round_down_to_multiple(frames - 1, self.round_frames) + 1
+
+    # Resamples video tensor to convert to self.framerate
+    def convert_framerate(self, video: torch.Tensor, source_fps: float):
+        num_frames = video.shape[0]
+        max_frame_index = num_frames - 1
+        new_num_frames = int(num_frames * self.framerate / source_fps)
+        frames_to_sample = torch.linspace(0, max_frame_index, new_num_frames).to(torch.int32)
+        return video[frames_to_sample]
+
+    def convert_audio_sample_rate(self, audio: torch.Tensor, source_sample_rate: int):
+        if source_sample_rate != self.audio_sample_rate:
+            audio = torchaudio.functional.resample(audio, source_sample_rate, self.audio_sample_rate)
+        return audio
+
+    def extract_clips(self, video, audio, target_frames, video_clip_mode):
+        # video is (channels, num_frames, height, width)
+        frames = video.shape[1]
+        if frames < target_frames:
+            # Dataset code has long since required a 1-to-1 mapping (assert checked). So just fail here if this ever happens (I think maybe it can't happen anymore).
+            raise ValueError(f'video with shape {video.shape} has less frames ({frames}) than the target_frames {target_frames}')
+
+        if audio is not None:
+            target_audio_samples = int(target_frames / self.framerate * self.audio_sample_rate)
+            # TODO: can we handle this better? Probably caused by rounding, variable frame rate, framerate conversion, audio track that is a tiny bit too short in the underlying video, etc.
+            if audio.shape[-1] < target_audio_samples:
+                print(f'WARNING: audio length {audio.shape[-1]} is shorter than the required {target_audio_samples}. This can rarely happen. Padding with silence.')
+                audio = F.pad(audio, (0, target_audio_samples - audio.shape[-1]))
+
+        if video_clip_mode == 'single_beginning':
+            if audio is not None:
+                audio = audio[:, :, :target_audio_samples]
+            return [(video[:, :target_frames, ...], audio)]
+        elif video_clip_mode == 'single_middle':
+            if audio is not None:
+                audio_start = int((audio.shape[-1] - target_audio_samples) / 2)
+                audio = audio[:, :, audio_start:audio_start+target_audio_samples]
+            start = int((frames - target_frames) / 2)
+            assert frames-start >= target_frames
+            return [(video[:, start:start+target_frames, ...], audio)]
+        # elif video_clip_mode == 'multiple_overlapping':
+        #     # Extract multiple clips so we use the whole video for training.
+        #     # The clips might overlap a little bit. We never cut anything off the end of the video.
+        #     num_clips = ((frames - 1) // target_frames) + 1
+        #     start_indices = torch.linspace(0, frames-target_frames, num_clips).int()
+        #     return [video[:, i:i+target_frames, ...] for i in start_indices]
+        else:
+            raise NotImplementedError(f'video_clip_mode={video_clip_mode} is not recognized')
+
     def __call__(self, spec, mask_filepath, size_bucket=None):
-        is_video = (Path(spec[1]).suffix in VIDEO_EXTENSIONS)
+        extension = Path(spec[1]).suffix
+        if extension == '.mkv':
+            # the ComfyUI video loader can't load these
+            raise ValueError(f'{spec[1]}: loading mkv files will not work properly')
+        is_video = (extension in VIDEO_EXTENSIONS)
 
         if spec[0] is None:
             tar_f = None
@@ -106,13 +148,28 @@ class PreprocessMediaFile:
             tar_f = self.tarfile_map[tar_filename]
             filepath_or_file = tar_f.extractfile(str(spec[1]))
 
+        if is_video and not isinstance(filepath_or_file, (str, os.PathLike)):
+            # ComfyUI's video wrapper rewinds BytesIO between its multiple
+            # probes, but not arbitrary tar streams.
+            tar_stream = filepath_or_file
+            filepath_or_file = io.BytesIO(tar_stream.read())
+            tar_stream.close()
+
+        audio = None
         if is_video:
             assert self.support_video
-            num_frames = 0
-            for frame in imageio.v3.imiter(filepath_or_file, fps=self.framerate):
-                num_frames += 1
-                height, width = frame.shape[:2]
-            video = imageio.v3.imiter(filepath_or_file, fps=self.framerate)
+            comfy_video = InputImpl.VideoFromFile(filepath_or_file)
+            width, height = comfy_video.get_dimensions()
+            num_frames = comfy_video.get_frame_count()
+            components = comfy_video.get_components()
+            video = components.images  # [f, h, w, c]
+            video = video.movedim(-1, 1)  # need [f, c, h, w]
+            video = self.convert_framerate(video, float(components.frame_rate))
+            num_frames = video.shape[0]
+            if self.support_audio and components.audio is not None:
+                audio = components.audio['waveform']
+                sample_rate = components.audio['sample_rate']
+                audio = self.convert_audio_sample_rate(audio, sample_rate)
         else:
             num_frames = 1
             pil_img = Image.open(filepath_or_file)
@@ -126,7 +183,7 @@ class PreprocessMediaFile:
 
         height_rounded = round_to_nearest_multiple(size_bucket_height, self.round_height)
         width_rounded = round_to_nearest_multiple(size_bucket_width, self.round_width)
-        frames_rounded = round_down_to_multiple(size_bucket_frames - 1, self.round_frames) + 1
+        frames_rounded = self.align_frames(size_bucket_frames)
         resize_wh = (width_rounded, height_rounded)
 
         if mask_filepath:
@@ -149,21 +206,23 @@ class PreprocessMediaFile:
             if not isinstance(frame, Image.Image):
                 frame = torchvision.transforms.functional.to_pil_image(frame)
             cropped_image = convert_crop_and_resize(frame, resize_wh)
-            resized_video[i, ...] = self.pil_to_tensor(cropped_image)
+            tmp = self.pil_to_tensor(cropped_image)
+            resized_video[i, ...] = tmp
 
         if hasattr(filepath_or_file, 'close'):
             filepath_or_file.close()
 
         if not self.support_video:
-            return [(resized_video.squeeze(0), mask)]
+            return [(resized_video.squeeze(0), None, mask)]
 
         # (num_frames, channels, height, width) -> (channels, num_frames, height, width)
         resized_video = torch.permute(resized_video, (1, 0, 2, 3))
         if not is_video:
-            return [(resized_video, mask)]
+            return [(resized_video, None, mask)]
         else:
-            videos = extract_clips(resized_video, frames_rounded, self.video_clip_mode)
-            return [(video, mask) for video in videos]
+            items = self.extract_clips(resized_video, audio, frames_rounded, self.video_clip_mode)
+            assert len(items) <= 1  # only support 0 or 1 extracted clip; dataset limitation
+            return [(item[0], item[1], mask) for item in items]
 
 
 # shared functionality between BasePipeline and ComfyPipeline
@@ -213,15 +272,18 @@ class CommonPipeline:
             return {'latents': latents}
         return fn
 
-    def configure_adapter(self, target_model, adapter_config):
-        target_linear_modules = set()
+    def get_target_modules(self, target_model):
+        target_modules = set()
         for name, module in target_model.named_modules():
             if module.__class__.__name__ not in self.adapter_target_modules:
                 continue
             for full_submodule_name, submodule in module.named_modules(prefix=name):
                 if isinstance(submodule, nn.Linear):
-                    target_linear_modules.add(full_submodule_name)
-        target_linear_modules = list(target_linear_modules)
+                    target_modules.add(full_submodule_name)
+        return list(target_modules)
+
+    def configure_adapter(self, target_model, adapter_config):
+        target_modules = self.get_target_modules(target_model)
 
         adapter_type = adapter_config['type']
         if adapter_type == 'lora':
@@ -230,7 +292,7 @@ class CommonPipeline:
                 lora_alpha=adapter_config['alpha'],
                 lora_dropout=adapter_config['dropout'],
                 bias='none',
-                target_modules=target_linear_modules,
+                target_modules=target_modules,
             )
         elif adapter_type == 'lokr':
             peft_config = peft.LoKrConfig(
@@ -238,7 +300,7 @@ class CommonPipeline:
                 decompose_factor=adapter_config['decompose_factor'],
                 alpha=adapter_config['alpha'],
                 rank_dropout=adapter_config['rank_dropout'],
-                target_modules=target_linear_modules,
+                target_modules=target_modules,
             )
         else:
             raise NotImplementedError(f'Adapter type {adapter_type} is not implemented')
@@ -473,6 +535,17 @@ def tokenize_with_weights(self, text:str, return_word_ids=False, **kwargs):
 SD1Tokenizer.tokenize_with_weights = tokenize_with_weights
 
 
+def maybe_pad(tokens, min_length, tokenizer):
+    amount = min_length - len(tokens)
+    if amount <= 0:
+        return
+    if tokenizer.pad_left:
+        for _ in range(amount):
+            tokens.insert(0, (tokenizer.pad_token, 1.0))
+    else:
+        tokens.extend([(tokenizer.pad_token, 1.0)] * amount)
+
+
 class ComfyPipeline(CommonPipeline):
     def __init__(self, config):
         super().__init__()
@@ -550,8 +623,24 @@ class ComfyPipeline(CommonPipeline):
                     new_linear.bias = module.bias
                 model._modules[mod_name] = new_linear
 
-            if len(list(module.children())) > 0:
-                self.dequantize(module, diffusion_model_dtype)
+            self.dequantize(module, diffusion_model_dtype)
+
+    def patch_quantized_modules(self, model):
+        # For every class that acts like a Linear but isn't a nn.Linear (e.g. quant linear), force it to be a nn.Linear
+        # subclass so that we can target it with LoRA.
+        linear_classes = set()
+        for module in model.modules():
+            if module.__class__.__name__ == 'Linear' and not isinstance(module, nn.Linear):
+                linear_classes.add(module.__class__)
+        for klass in linear_classes:
+            bases = klass.__bases__
+            assert bases[0] == nn.Module
+            klass.__bases__ = (nn.Linear, *bases[1:])
+            # Get rid of the special quant state dict saving/loading so Deepspeed checkpointing works. We only can train adapters on top
+            # of quantized weights, so the base model weights never need to be saved / loaded in checkpoints anyway.
+            del klass.state_dict
+            del klass._load_from_state_dict
+        return len(linear_classes) > 0
 
     def load_diffusion_model(self):
         dtype = self.model_config['dtype']
@@ -559,7 +648,9 @@ class ComfyPipeline(CommonPipeline):
         model_options['dtype'] = dtype
         model_patcher = comfy.sd.load_diffusion_model(self.model_config['diffusion_model'], model_options=model_options, disable_dynamic=True)
 
+        merging_adapter = False
         for adapter_path in self.model_config.get('merge_adapters', []):
+            merging_adapter = True
             if is_main_process():
                 print(f'Merging adapter {adapter_path}')
             sd = comfy.utils.load_torch_file(adapter_path, safe_load=True)
@@ -568,17 +659,27 @@ class ComfyPipeline(CommonPipeline):
 
         model_patcher.set_model_compute_dtype(dtype)
         with torch.no_grad():
-            model_patcher.patch_model()
+            # Use a few GB of VRAM in case we are merging an adapter (compute intensive).
+            if merging_adapter:
+                model_patcher.patch_model(device_to='cuda', lowvram_model_memory=4*(1024**3))
+            # But ONLY if we have an adapter to merge, else block swapping fails with a CUDA error (???)
+            else:
+                model_patcher.patch_model()
         self.diffusion_model = model_patcher.model.diffusion_model
-        self.model_patcher = model_patcher
+        # If we merged an adapter, this object stores an entire extra copy of the weights, so delete it now.
+        del model_patcher
 
-        diffusion_model_dtype = self.model_config.get('diffusion_model_dtype', dtype)
-        self.dequantize(self.diffusion_model, diffusion_model_dtype)
+        if diffusion_model_dtype := self.model_config.get('diffusion_model_dtype', None):
+            self.dequantize(self.diffusion_model, diffusion_model_dtype)
 
         self.diffusion_model.train()
         for name, p in self.diffusion_model.named_parameters():
             p.original_name = name
             p.requires_grad_(True)
+
+        patched_something = self.patch_quantized_modules(self.diffusion_model)
+        if patched_something:
+            assert 'adapter' in self.config, 'You are trying to full finetune a quantized model which will not work'
 
     def get_vae(self):
         return self.vae
@@ -590,12 +691,8 @@ class ComfyPipeline(CommonPipeline):
         # move channel dim to end
         # works for both images (b c h w) and video (b c f h w)
         img = img.movedim(1, -1)
-        # Pixels are in range [-1, 1], Comfy code expects [0, 1]
-        img = (img + 1) / 2
         latents = self.vae.encode(img)
-        if self.latent_format is not None:
-            # some older models do this in prepare_inputs() so it can be None
-            latents = self.latent_format.process_in(latents)
+        latents = self.latent_format.process_in(latents)
         return latents
 
     def vae_decode(self, latents):
@@ -657,11 +754,14 @@ class ComfyPipeline(CommonPipeline):
             original_min_length = tokenizer.min_length
 
             max_length = 0
-            for text in captions:
+            token_lengths = [0]*len(captions)
+            for i, text in enumerate(captions):
                 tokens = text_encoder.tokenize(text)
                 # tokens looks like {'qwen3_4b': [[(0, 1.0), (1, 1.0), (2, 1.0)]]}
                 for v in tokens.values():
-                    max_length = max(max_length, len(v[0]))
+                    L = len(v[0])
+                    max_length = max(max_length, L)
+                    token_lengths[i] = L
 
             # Pad to max length in the batch. We need to do this ourselves or the ComfyUI backend code will fail (it concats tensors assumed to be the same length).
             tokenizer.min_length = max_length
@@ -669,7 +769,9 @@ class ComfyPipeline(CommonPipeline):
             for text in captions:
                 tokens = text_encoder.tokenize(text)
                 for k, v in tokens.items():
-                    tokens_dict[k].extend(v)
+                    token_list = v[0]
+                    maybe_pad(token_list, max_length, tokenizer)  # some tokenizers don't listen to min_length
+                    tokens_dict[k].append(token_list)
 
             o = text_encoder.encode_from_tokens_scheduled(tokens_dict)
 
@@ -678,8 +780,10 @@ class ComfyPipeline(CommonPipeline):
             if 'attention_mask' in extra:
                 attention_mask = extra['attention_mask']
             else:
-                # Krea2 (maybe others) removes attention_mask if it is all 1s (e.g. batch size 1)
-                attention_mask = torch.ones(text_embeds.shape[:2], dtype=torch.int64, device=text_embeds.device)
+                # Some models remove attention_mask if it is all 1s (Krea2), or don't return it at all
+                attention_mask = torch.zeros(text_embeds.shape[:2], dtype=torch.int64, device=text_embeds.device)
+                for i, L in enumerate(token_lengths):
+                    attention_mask[i, :L] = torch.ones((L,), dtype=torch.int64, device=text_embeds.device)
 
             tokenizer.min_length = original_min_length
             return {

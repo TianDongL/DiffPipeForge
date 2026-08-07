@@ -70,7 +70,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
     const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const isFirstRender = useRef(true);
 
-    const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelType || '');
+    const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos', 'minimax_h3'].includes(modelType || '');
     const isEditingModel = modelType === 'flux_kontext' || modelType === 'qwen2511' || modelType === 'flux2' ||
         (modelType === 'qwen_image' && ['qwen_edit', 'qwen_2509'].includes(modelVersion || ''));
 

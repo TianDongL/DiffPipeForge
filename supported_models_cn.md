@@ -29,6 +29,7 @@
 |LTX 2.3         |✅    |❌              |✅                |
 |Ideogram4       |✅    |✅              |✅                |
 |Krea 2          |✅    |✅              |✅                |
+|MiniMax H3      |✅    |✅              |✅                |
 
 ## SDXL
 ```
@@ -302,7 +303,7 @@ transformer_dtype = 'float8'
 
 支持Flux Kontext，适用于标准t2i数据集和编辑数据集。权重形状与Flux Dev 100%兼容，因此如果你已经有Dev Diffusers文件夹，可以使用transformer_path指向Kontext单一模型文件以节省空间。
 
-参见[Flux Kontext示例数据集配置](../examples/flux_kontext_dataset.toml)了解如何配置数据集。
+参见[Flux Kontext示例数据集配置](examples/flux_kontext_dataset.toml)了解如何配置数据集。
 
 **重要**：控制/上下文图像的纵横比应与目标图像大致相同。所有纵横比和大小分桶都是针对目标图像进行的。然后，控制图像会被调整大小并裁剪以匹配目标图像大小。如果控制图像的纵横比与目标图像差异很大，将会裁剪掉控制图像的很多部分。
 
@@ -385,7 +386,7 @@ pip install git+https://github.com/huggingface/diffusers
 Qwen-Image的LoRA以ComfyUI格式保存。
 
 ### 在单个24GB GPU上训练LoRA
-- 你将需要块交换。参见[示例24GB显存配置](../examples/qwen_image_24gb_vram.toml)，其中所有设置都是正确的。
+- 你将需要块交换。参见[示例24GB显存配置](examples/qwen_image_24gb_vram.toml)，其中所有设置都是正确的。
 - 使用可扩展段CUDA功能：```PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True NCCL_P2P_DISABLE="1" NCCL_IB_DISABLE="1" deepspeed --num_gpus=1 train.py --deepspeed --config /home/anon/code/diffusion-pipe-configs/tmp.toml```
 - 使用640的数据集分辨率。这是模型训练时使用的分辨率之一，可能比512稍好。
 - 如果你使用更高的LoRA秩或更高的分辨率，可能需要增加blocks_to_swap。
@@ -401,7 +402,7 @@ dtype = 'bfloat16'
 transformer_dtype = 'float8'
 timestep_sample_method = 'logit_normal'
 ```
-配置和训练Qwen-Image-Edit与Flux-Kontext相同。参见[示例数据集配置](../examples/flux_kontext_dataset.toml)。同样的数据集注意事项适用。参考图像会被调整大小到目标图像最终所在的任何大小分桶，因此你的参考图像需要与目标图像具有大致相同的纵横比，否则它们会被过度裁剪。
+配置和训练Qwen-Image-Edit与Flux-Kontext相同。参见[示例数据集配置](examples/flux_kontext_dataset.toml)。同样的数据集注意事项适用。参考图像会被调整大小到目标图像最终所在的任何大小分桶，因此你的参考图像需要与目标图像具有大致相同的纵横比，否则它们会被过度裁剪。
 
 该模型接受的输入比T2I训练更大，因此速度更慢，使用更多显存。我不知道是否可以在24GB显存上训练它。也许如果进行足够的块交换。
 
@@ -696,3 +697,34 @@ diffusion_model_dtype = 'float8'
 timestep_sample_method = 'logit_normal'
 ```
 此配置可在 24GB 显存下以 512 分辨率训练 rank 32 的 LoRA。
+
+## MiniMax H3
+
+```toml
+[model]
+type = 'minimax_h3'
+diffusion_model = '/data2/imagegen_models/comfyui-models/minimax_h3_fl2va_pruned_int8_convrot.safetensors'
+vae = '/data2/imagegen_models/comfyui-models/minimax_h3_video_vae_fp16.safetensors'
+audio_vae = '/data2/imagegen_models/comfyui-models/minimax_h3_audio_vae_fp32.safetensors'
+text_encoders = [
+    {path = '/data2/imagegen_models/comfyui-models/qwen3vl_32b_minimax_h3_int8_convrot.safetensors', type = 'minimax'}
+]
+dtype = 'bfloat16'
+timestep_sample_method = 'uniform'  # 也可使用 'logit_normal'
+shift = 8  # 最佳取值尚未确定；对于视频，1 明显过低。
+```
+
+所有组件均须使用 ComfyUI 格式文件，保存的模型和 LoRA 同样采用 ComfyUI 格式。现在可以直接在量化权重上训练 LoRA；上游作者推荐 int8 convrot 扩散模型和文本编码器，因为其速度更快、显存占用更低，并能保持更好的质量。直接在量化权重上训练时，不要设置 `diffusion_model_dtype`。量化基座不能进行全量微调；如需全量微调，请使用非量化模型。
+
+当前限制与行为：
+
+- 仅支持文生图和文生视频训练。若源视频包含音轨，音频会自动参与训练（即实际上的 T2VA）。目前不支持参考图、编辑、图生视频或首尾帧条件训练。
+- 训练 micro-batch size 必须为 `1`，可通过 `gradient_accumulation_steps` 模拟更大的 batch。
+- MiniMax H3 固定按 24 fps 预处理视频、按 32 kHz 处理音频；无音轨视频和纯图片数据集均可训练。
+- LoRA 不训练 AdaLN 权重，因此同一个 LoRA 可同时兼容完整和剪枝版 H3 检查点。
+- 文档给出的 `blocks_to_swap` 最大值为 `48`；同时建议使用 `activation_checkpointing = 'unsloth'` 进一步降低显存占用。
+- 最佳时间步分布和 shift 尚未确定。`timestep_sample_method = 'uniform'` 配合 `shift = 12` 与默认推理调度一致；降低到 8 或更低可能有利于细节学习，但会牺牲大尺度结构与运动表现。
+- 训练会逐渐解除模型蒸馏，因此推理时可能需要 CFG。图片训练本身有效，但若只使用图片训练，可能削弱模型的视频与运动理解能力。
+- 大型文本编码器在缓存结束后可能仍占用系统内存并导致内存不足。遇到这种情况时，请先完成缓存，重启应用，再复用已有缓存开始训练。
+
+训练前请完整阅读双语版 [MiniMax H3 训练说明](minimax_h3_notes.md)。

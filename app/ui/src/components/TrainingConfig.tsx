@@ -16,7 +16,8 @@ export interface TrainingConfigProps {
 export function TrainingConfig({ data, modelType, onChange, validationEnabled = true }: TrainingConfigProps) {
     const { t } = useTranslation();
 
-    const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos'].includes(modelType || '');
+    const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos', 'minimax_h3'].includes(modelType || '');
+    const isMiniMaxH3 = modelType === 'minimax_h3';
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         onChange({ ...data, [e.target.name]: e.target.value });
@@ -33,8 +34,8 @@ export function TrainingConfig({ data, modelType, onChange, validationEnabled = 
                 <div className="grid gap-6 md:grid-cols-3">
                     <GlassInput label={t('training.output_name')} helpText={t('help.output_name')} name="output_folder_name" value={data.output_folder_name ?? 'mylora'} onChange={handleChange} />
                     <GlassInput label={t('training.epochs')} helpText={t('help.epochs')} name="epochs" type="number" value={data.epochs ?? 50} onChange={handleChange} />
-                    <GlassInput label={t('training.batch_size')} helpText={t('help.micro_batch_size_per_gpu')} name="micro_batch_size_per_gpu" type="number" value={data.micro_batch_size_per_gpu ?? 1} onChange={handleChange} />
-                    <GlassInput label={t('training.image_micro_batch_size_per_gpu')} helpText={t('help.image_micro_batch_size_per_gpu')} name="image_micro_batch_size_per_gpu" type="number" value={data.image_micro_batch_size_per_gpu ?? ''} onChange={handleChange} placeholder={data.micro_batch_size_per_gpu ?? 1} />
+                    <GlassInput label={t('training.batch_size')} helpText={isMiniMaxH3 ? t('help.minimax_batch_size') : t('help.micro_batch_size_per_gpu')} name="micro_batch_size_per_gpu" type="number" max={isMiniMaxH3 ? 1 : undefined} value={data.micro_batch_size_per_gpu ?? 1} onChange={handleChange} />
+                    <GlassInput label={t('training.image_micro_batch_size_per_gpu')} helpText={isMiniMaxH3 ? t('help.minimax_batch_size') : t('help.image_micro_batch_size_per_gpu')} name="image_micro_batch_size_per_gpu" type="number" max={isMiniMaxH3 ? 1 : undefined} value={data.image_micro_batch_size_per_gpu ?? ''} onChange={handleChange} placeholder={data.micro_batch_size_per_gpu ?? 1} />
 
                     <GlassInput label={t('training.grad_accumulation')} helpText={t('help.gradient_accumulation_steps')} name="gradient_accumulation_steps" type="number" value={data.gradient_accumulation_steps ?? 3} onChange={handleChange} />
                     <GlassInput label={t('training.warmup_steps')} helpText={t('help.warmup_steps')} name="warmup_steps" type="number" min="0" value={data.warmup_steps ?? 500} onChange={handleChange} />
@@ -86,7 +87,7 @@ export function TrainingConfig({ data, modelType, onChange, validationEnabled = 
                     />
 
                     <GlassInput label={t('training.pipeline_stages')} helpText={t('help.pipeline_stages')} name="pipeline_stages" type="number" value={data.pipeline_stages ?? 1} onChange={handleChange} />
-                    <GlassInput label={t('training.blocks_to_swap')} helpText={t('help.blocks_to_swap')} name="blocks_to_swap" type="number" min={0} value={data.blocks_to_swap ?? 0} onChange={handleChange} />
+                    <GlassInput label={t('training.blocks_to_swap')} helpText={isMiniMaxH3 ? t('help.minimax_blocks_to_swap') : t('help.blocks_to_swap')} name="blocks_to_swap" type="number" min={0} max={isMiniMaxH3 ? 48 : undefined} value={data.blocks_to_swap ?? 0} onChange={handleChange} />
                     <GlassInput label={t('training.caching_batch_size')} helpText={t('help.caching_batch_size')} name="caching_batch_size" type="number" value={data.caching_batch_size ?? 1} onChange={handleChange} />
 
                     {isVideoModel && (
@@ -94,13 +95,11 @@ export function TrainingConfig({ data, modelType, onChange, validationEnabled = 
                             label={t('training.video_clip_mode')}
                             helpText={t('help.video_clip_mode')}
                             name="video_clip_mode"
-                            value={data.video_clip_mode ?? 'none'}
+                            value={data.video_clip_mode ?? 'single_beginning'}
                             onChange={handleChange}
                             options={[
-                                { label: 'None', value: 'none' },
                                 { label: 'Single Beginning', value: 'single_beginning' },
-                                { label: 'Single Middle', value: 'single_middle' },
-                                { label: 'Multiple Overlapping', value: 'multiple_overlapping' }
+                                { label: 'Single Middle', value: 'single_middle' }
                             ]}
                         />
                     )}
@@ -121,8 +120,8 @@ export function TrainingConfig({ data, modelType, onChange, validationEnabled = 
                             <div className="grid gap-6 md:grid-cols-3">
                                 <GlassInput label={t('training.eval_every_n_epochs')} helpText={t('help.eval_every_n_epochs')} name="eval_every_n_epochs" type="number" value={data.eval_every_n_epochs ?? 1} onChange={handleChange} />
                                 <GlassInput label={t('advanced_training.eval_every_n_steps')} helpText={t('help.eval_every_n_steps')} name="eval_every_n_steps" type="number" value={data.eval_every_n_steps ?? 0} onChange={handleChange} />
-                                <GlassInput label={t('training.eval_batch_size')} helpText={t('help.eval_batch_size')} name="eval_micro_batch_size_per_gpu" type="number" value={data.eval_micro_batch_size_per_gpu ?? 1} onChange={handleChange} />
-                                <GlassInput label={t('training.image_eval_micro_batch_size_per_gpu')} helpText={t('help.image_eval_micro_batch_size_per_gpu')} name="image_eval_micro_batch_size_per_gpu" type="number" value={data.image_eval_micro_batch_size_per_gpu ?? ''} onChange={handleChange} placeholder={data.eval_micro_batch_size_per_gpu ?? 1} />
+                                <GlassInput label={t('training.eval_batch_size')} helpText={isMiniMaxH3 ? t('help.minimax_batch_size') : t('help.eval_batch_size')} name="eval_micro_batch_size_per_gpu" type="number" max={isMiniMaxH3 ? 1 : undefined} value={data.eval_micro_batch_size_per_gpu ?? 1} onChange={handleChange} />
+                                <GlassInput label={t('training.image_eval_micro_batch_size_per_gpu')} helpText={isMiniMaxH3 ? t('help.minimax_batch_size') : t('help.image_eval_micro_batch_size_per_gpu')} name="eval_image_micro_batch_size_per_gpu" type="number" max={isMiniMaxH3 ? 1 : undefined} value={data.eval_image_micro_batch_size_per_gpu ?? ''} onChange={handleChange} placeholder={data.eval_micro_batch_size_per_gpu ?? 1} />
                                 <GlassInput label={t('training.eval_grad_accumulation')} helpText={t('help.eval_gradient_accumulation_steps')} name="eval_gradient_accumulation_steps" type="number" value={data.eval_gradient_accumulation_steps ?? 1} onChange={handleChange} />
 
                                 <div className="flex items-center gap-6 mt-8">

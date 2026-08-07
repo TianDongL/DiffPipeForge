@@ -405,6 +405,9 @@ if __name__ == '__main__':
     elif model_type == 'krea2':
         from models import krea2
         model = krea2.Krea2Pipeline(config)
+    elif model_type == 'minimax_h3':
+        from models import minimax_h3
+        model = minimax_h3.MinimaxH3Pipeline(config)
     else:
         raise NotImplementedError(f'Model type {model_type} is not implemented')
 
@@ -547,7 +550,7 @@ if __name__ == '__main__':
         quit()
 
     if args.test_sample:
-        model.prepare_sample_test('a golden retriever running through a grassy field', cfg=5)
+        model.prepare_sample_test('a golden retriever running through a grassy field', cfg=1)
 
 
     model.load_diffusion_model()

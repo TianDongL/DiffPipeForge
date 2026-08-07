@@ -13,7 +13,7 @@ tqdm
 safetensors
 # bitsandbytes
 imageio[ffmpeg]
-av
+av>=16.0.0
 einops
 accelerate
 loguru
@@ -34,3 +34,6 @@ ninja
 pynvml
 fastapi
 uvicorn[standard]
+comfy-kitchen==0.2.26
+comfy-aimdo==0.4.11
+scipy

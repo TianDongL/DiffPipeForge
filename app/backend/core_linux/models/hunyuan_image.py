@@ -44,6 +44,7 @@ COMFYUI_TO_ORIGINAL_LORA_MAPPING = {v: k for k, v in ORIGINAL_TO_COMFYUI_LORA_MA
 
 class HunyuanImagePipeline(BasePipeline):
     name = 'hunyuan_image'
+    pixels_round_to_multiple = 32
     checkpointable_layers = ['DoubleBlock', 'SingleBlock']
     adapter_target_modules = ['MMDoubleStreamBlock', 'MMSingleStreamBlock']
 
@@ -166,7 +167,9 @@ class HunyuanImagePipeline(BasePipeline):
 
     def get_call_vae_fn(self, vae):
         def fn(image):
-            latents = vae.encode(image.to(vae.device, vae.dtype)).latent_dist.mode()
+            image = image.to(vae.device, vae.dtype)
+            image = image*2 - 1
+            latents = vae.encode(image).latent_dist.mode()
             assert latents.ndim == 4
             latents = latents * vae.config.scaling_factor
             result = {'latents': latents}

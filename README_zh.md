@@ -30,7 +30,7 @@
 ## ✨ 核心特性
 
 - **🚀 广泛的模型支持**：支持多种架构，包括：
-  - **视频模型**：LTX-Video, Hunyuan Video (1.0 & 1.5), Wan (2.1 & 2.2), Cosmos。
+  - **视频模型**：LTX-Video, Hunyuan Video (1.0 & 1.5), Wan (2.1 & 2.2), Cosmos, MiniMax H3。
   - **图像模型**：Flux (Dev/Schnell), SDXL, Lumina 2.0, SD3/3.5, Qwen-Image，Flux 2(dev/klein)
   - **专用模型**：Chroma, HiDream, OmniGen2, AuraFlow, Z-Image。
 - **📊 先进的数据集管理**：
@@ -49,6 +49,9 @@
   - 现代感十足的 **玻璃拟态 (Glassmorphism)** 设计系统。
   - 完美支持 **深色模式** 和 **浅色模式**。
   - **多语言** 支持（中英文切换）。
+
+> [!IMPORTANT]
+> 从此前的上游基线升级后，使用 **Z-Image、Flux 2、Ernie-Image** 时必须重新生成 latent 缓存。latent 缩放现已移到缓存阶段，旧缓存不再兼容。本次更新同时加入 MiniMax H3 音频训练，以及在受支持的 ComfyUI 量化检查点上直接训练 LoRA 的能力。
 
 ## 🛠️ 项目结构
 
@@ -114,5 +117,6 @@ chmod +x browser.sh && ./browser.sh
 有关详细的配置示例和特定模型的说明，请参阅：
 - [支持模型指南](supported_models_cn.md)
 - [Supported Models Guide (English)](supported_models.md)
+- [MiniMax H3 训练说明 / Training Notes](minimax_h3_notes.md)
 - [示例配置文件](examples/)
 

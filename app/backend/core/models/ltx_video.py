@@ -24,6 +24,7 @@ KEEP_IN_HIGH_PRECISION = ['norm', 'bias', 'scale_shift_table', 'patchify_proj', 
 class LTXVideoPipeline(BasePipeline):
     name = 'ltx-video'
     framerate = 25
+    pixels_round_to_multiple = 32
     checkpointable_layers = ['TransformerLayer']
     adapter_target_modules = ['BasicTransformerBlock']
 
@@ -96,8 +97,10 @@ class LTXVideoPipeline(BasePipeline):
 
     def get_call_vae_fn(self, vae):
         def fn(tensor):
+            tensor = tensor.to(dtype=vae.dtype, device=vae.device)
+            tensor = tensor*2 - 1
             latents = vae_encode(
-                tensor.to(dtype=vae.dtype, device=vae.device),
+                tensor,
                 vae,
                 vae_per_channel_normalize=True,
             )

@@ -15,6 +15,73 @@ interface TrainingLauncherPageProps {
     projectPath?: string | null;
 }
 
+type MiniMaxValidationKey =
+    | 'validation.minimax_required_paths'
+    | 'validation.minimax_batch_size'
+    | 'validation.minimax_blocks_to_swap'
+    | 'validation.minimax_shift'
+    | 'validation.invalid_video_clip_mode';
+
+type TomlRecord = Record<string, unknown>;
+
+const isTomlRecord = (value: unknown): value is TomlRecord => (
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const isBatchSizeOne = (value: unknown): boolean => {
+    if (value === undefined || value === null || value === '') return true;
+    if (Array.isArray(value)) {
+        return value.every((entry) => Array.isArray(entry) && Number(entry[1]) === 1);
+    }
+    return Number(value) === 1;
+};
+
+const validateMiniMaxH3Config = (configValue: unknown): MiniMaxValidationKey | null => {
+    if (!isTomlRecord(configValue)) return null;
+
+    const modelValue = configValue.model;
+    if (!isTomlRecord(modelValue)) return null;
+
+    const config = configValue;
+    const model = modelValue;
+    if (model.type !== 'minimax_h3') return null;
+
+    const textEncoders = model.text_encoders;
+    const firstTextEncoder = Array.isArray(textEncoders) ? textEncoders[0] : undefined;
+    const textEncoderPath = isTomlRecord(firstTextEncoder) ? firstTextEncoder.path : undefined;
+    const requiredPaths = [model.diffusion_model, model.vae, model.audio_vae, textEncoderPath];
+    if (requiredPaths.some((value) => typeof value !== 'string' || value.trim() === '')) {
+        return 'validation.minimax_required_paths';
+    }
+
+    const batchSizeKeys = [
+        'micro_batch_size_per_gpu',
+        'image_micro_batch_size_per_gpu',
+        'eval_micro_batch_size_per_gpu',
+        'eval_image_micro_batch_size_per_gpu'
+    ];
+    if (batchSizeKeys.some((key) => !isBatchSizeOne(config[key]))) {
+        return 'validation.minimax_batch_size';
+    }
+
+    const blocksToSwap = Number(config.blocks_to_swap ?? 0);
+    if (!Number.isFinite(blocksToSwap) || blocksToSwap < 0 || blocksToSwap > 48) {
+        return 'validation.minimax_blocks_to_swap';
+    }
+
+    const shift = Number(model.shift);
+    if (!Number.isFinite(shift) || shift <= 0) {
+        return 'validation.minimax_shift';
+    }
+
+    const videoClipMode = config.video_clip_mode ?? 'single_beginning';
+    if (videoClipMode !== 'single_beginning' && videoClipMode !== 'single_middle') {
+        return 'validation.invalid_video_clip_mode';
+    }
+
+    return null;
+};
+
 export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps) {
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
@@ -180,6 +247,13 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
             }
 
             const configPath = `${projectPath}/trainconfig.toml`;
+            const configContent = await ipc.invoke('read-file', configPath);
+            const parsedConfig = parse(configContent);
+            const miniMaxValidationError = validateMiniMaxH3Config(parsedConfig);
+            if (miniMaxValidationError) {
+                showToast(t(miniMaxValidationError), 'error');
+                return;
+            }
 
             setIsTraining(true);
 
