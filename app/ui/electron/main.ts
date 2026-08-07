@@ -25,6 +25,202 @@ const resolveBackendPath = (subPath: string): string => {
   return path.join(APP_ROOT_DIR, 'app', subPath);
 };
 
+interface TrainingCheckpointInfo {
+  name: string;
+  path: string;
+  latestTag: string;
+  step: number | null;
+  modifiedAt: number;
+}
+
+interface TrainingCheckpointInspection {
+  valid: boolean;
+  path: string;
+  latestTag?: string;
+  step?: number | null;
+  modifiedAt?: number;
+  errorCode?: string;
+  message?: string;
+}
+
+const TRAINING_SESSION_NAME_PATTERN = /^\d{8}_\d{2}-\d{2}-\d{2}$/;
+
+const getTrainingOutputDirectory = (configPath: string): string => {
+  const configContent = fs.readFileSync(configPath, 'utf8');
+  const config: any = parse(configContent);
+  const configuredOutputDir = typeof config.output_dir === 'string' ? config.output_dir.trim() : '';
+  if (!configuredOutputDir) {
+    throw new Error('trainconfig.toml 中缺少 output_dir');
+  }
+
+  if (path.isAbsolute(configuredOutputDir)) {
+    return path.normalize(configuredOutputDir);
+  }
+
+  // Match the training process cwd so relative output_dir values resolve exactly
+  // as they do in the Windows/Linux kernels.
+  const isLinux = process.platform === 'linux';
+  const trainingScript = resolveBackendPath(isLinux ? 'backend/core_linux/train.py' : 'backend/core/train.py');
+  return path.resolve(path.dirname(trainingScript), configuredOutputDir);
+};
+
+const inspectTrainingCheckpointDirectory = (runDirectory: string): TrainingCheckpointInspection => {
+  const normalizedPath = path.resolve(runDirectory);
+
+  let runStats: fs.Stats;
+  try {
+    runStats = fs.statSync(normalizedPath);
+  } catch {
+    return {
+      valid: false,
+      path: normalizedPath,
+      errorCode: 'checkpoint_not_directory',
+      message: '检查点目录不存在。请选择包含 latest 文件的训练运行目录。'
+    };
+  }
+
+  if (!runStats.isDirectory()) {
+    return {
+      valid: false,
+      path: normalizedPath,
+      errorCode: 'checkpoint_not_directory',
+      message: '检查点必须是文件夹，不能选择文件。'
+    };
+  }
+
+  const latestPath = path.join(normalizedPath, 'latest');
+  if (!fs.existsSync(latestPath) || !fs.statSync(latestPath).isFile()) {
+    const folderName = path.basename(normalizedPath);
+    const parentLatest = path.join(path.dirname(normalizedPath), 'latest');
+    const selectedTagFolder = /^global_step\d+$/.test(folderName) && fs.existsSync(parentLatest);
+    return {
+      valid: false,
+      path: normalizedPath,
+      errorCode: selectedTagFolder ? 'checkpoint_select_run_root' : 'checkpoint_missing_latest',
+      message: selectedTagFolder
+        ? `请选择上一级训练运行目录 ${path.dirname(normalizedPath)}，不要直接选择 ${folderName}。`
+        : '该文件夹不是可恢复的训练运行目录：缺少 latest 文件。'
+    };
+  }
+
+  if (fs.statSync(latestPath).size > 4096) {
+    return {
+      valid: false,
+      path: normalizedPath,
+      errorCode: 'checkpoint_invalid_latest',
+      message: 'latest 文件内容异常，无法作为检查点标签读取。'
+    };
+  }
+
+  const latestTag = fs.readFileSync(latestPath, 'utf8').trim();
+  if (!latestTag || !/^[A-Za-z0-9._-]+$/.test(latestTag) || latestTag === '.' || latestTag === '..') {
+    return {
+      valid: false,
+      path: normalizedPath,
+      errorCode: 'checkpoint_invalid_latest',
+      message: 'latest 文件中的检查点标签无效。'
+    };
+  }
+
+  const tagDirectory = path.join(normalizedPath, latestTag);
+  if (!fs.existsSync(tagDirectory) || !fs.statSync(tagDirectory).isDirectory()) {
+    return {
+      valid: false,
+      path: normalizedPath,
+      latestTag,
+      errorCode: 'checkpoint_missing_tag_directory',
+      message: `latest 指向的检查点文件夹 ${latestTag} 不存在。`
+    };
+  }
+
+  const hasModelState = fs.readdirSync(tagDirectory, { withFileTypes: true }).some((entry) => {
+    if (!entry.isFile() || !entry.name.endsWith('_model_states.pt')) return false;
+    return fs.statSync(path.join(tagDirectory, entry.name)).size > 0;
+  });
+  if (!hasModelState) {
+    return {
+      valid: false,
+      path: normalizedPath,
+      latestTag,
+      errorCode: 'checkpoint_missing_model_state',
+      message: `检查点文件夹 ${latestTag} 中没有 DeepSpeed model state。`
+    };
+  }
+
+  const stepMatch = /^global_step(\d+)$/.exec(latestTag);
+  const modifiedAt = Math.max(
+    runStats.mtimeMs,
+    fs.statSync(latestPath).mtimeMs,
+    fs.statSync(tagDirectory).mtimeMs
+  );
+
+  return {
+    valid: true,
+    path: normalizedPath,
+    latestTag,
+    step: stepMatch ? Number(stepMatch[1]) : null,
+    modifiedAt
+  };
+};
+
+const resolveResumeCheckpoint = (configPath: string, requestedPath: string): TrainingCheckpointInspection => {
+  const outputDirectory = getTrainingOutputDirectory(configPath);
+  const trimmedPath = requestedPath.trim();
+  if (!path.isAbsolute(trimmedPath) && (
+    !/^[A-Za-z0-9._-]+$/.test(trimmedPath)
+    || trimmedPath === '.'
+    || trimmedPath === '..'
+  )) {
+    return {
+      valid: false,
+      path: trimmedPath,
+      errorCode: 'checkpoint_relative_name_only',
+      message: '相对路径只能填写输出目录下的运行文件夹名称；其他位置请填写绝对路径。'
+    };
+  }
+  const candidate = path.isAbsolute(trimmedPath)
+    ? path.normalize(trimmedPath)
+    : path.resolve(outputDirectory, trimmedPath);
+  try {
+    return inspectTrainingCheckpointDirectory(candidate);
+  } catch {
+    return {
+      valid: false,
+      path: candidate,
+      errorCode: 'checkpoint_unreadable',
+      message: '检查点目录无法读取或内容不完整。'
+    };
+  }
+};
+
+const listTrainingCheckpoints = (configPath: string): { outputDir: string; checkpoints: TrainingCheckpointInfo[] } => {
+  const outputDir = getTrainingOutputDirectory(configPath);
+  if (!fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
+    return { outputDir, checkpoints: [] };
+  }
+
+  const checkpoints = fs.readdirSync(outputDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      try {
+        return inspectTrainingCheckpointDirectory(path.join(outputDir, entry.name));
+      } catch {
+        return { valid: false, path: path.join(outputDir, entry.name) } as TrainingCheckpointInspection;
+      }
+    })
+    .filter((inspection): inspection is TrainingCheckpointInspection & Required<Pick<TrainingCheckpointInspection, 'latestTag' | 'modifiedAt'>> => inspection.valid)
+    .map((inspection) => ({
+      name: path.basename(inspection.path),
+      path: inspection.path,
+      latestTag: inspection.latestTag,
+      step: inspection.step ?? null,
+      modifiedAt: inspection.modifiedAt
+    }))
+    .sort((a, b) => b.modifiedAt - a.modifiedAt);
+
+  return { outputDir, checkpoints };
+};
+
 function setupLogging() {
   try {
     if (!fs.existsSync(LOG_DIR)) {
@@ -2059,6 +2255,23 @@ enable_ar_bucket = true
   let trainingLogQueue: string[] = [];
   let currentLogFilePath: string | null = null;
 
+  ipcMain.handle('list-resume-checkpoints', async (_event, configPath: string) => {
+    if (!configPath || !fs.existsSync(configPath)) {
+      throw new Error('Missing or invalid configPath');
+    }
+    return listTrainingCheckpoints(configPath);
+  });
+
+  ipcMain.handle('validate-resume-checkpoint', async (_event, { configPath, checkpointPath }: { configPath: string; checkpointPath: string }) => {
+    if (!configPath || !fs.existsSync(configPath)) {
+      return { valid: false, errorCode: 'checkpoint_invalid_config', message: '训练配置文件不存在。' };
+    }
+    if (typeof checkpointPath !== 'string' || !checkpointPath.trim()) {
+      return { valid: true, path: '' };
+    }
+    return resolveResumeCheckpoint(configPath, checkpointPath);
+  });
+
   ipcMain.handle('start-training', async (_event, args) => {
     if (trainingProcess) return { success: false, message: "训练已经在进行中" };
 
@@ -2086,9 +2299,7 @@ enable_ar_bucket = true
         // Parse config to find base output dir
         let baseOutputDir = '';
         try {
-          const configContent = fs.readFileSync(configPath, 'utf8');
-          const config: any = parse(configContent);
-          baseOutputDir = config.output_dir;
+          baseOutputDir = getTrainingOutputDirectory(configPath);
         } catch (e) {
           console.warn("[Training] Failed to parse config for output_dir:", e);
         }
@@ -2111,7 +2322,7 @@ enable_ar_bucket = true
             });
 
             // Timestamp format YYYYMMDD_HH-MM-SS
-            const sessions = dirs.filter(d => /^\d{8}_\d{2}-\d{2}-\d{2}$/.test(d));
+            const sessions = dirs.filter(d => TRAINING_SESSION_NAME_PATTERN.test(d));
             if (sessions.length > 0) {
               const newest = sessions.sort().reverse()[0];
               const newestPath = path.join(baseOutputDir, newest);
@@ -2162,13 +2373,30 @@ enable_ar_bucket = true
           return;
         }
 
+        let validatedResumeCheckpoint = '';
+        if (resumeFromCheckpoint && typeof resumeFromCheckpoint === 'string' && resumeFromCheckpoint.trim() !== '') {
+          const inspection = resolveResumeCheckpoint(configPath, resumeFromCheckpoint);
+          if (!inspection.valid) {
+            resolve({
+              success: false,
+              code: inspection.errorCode,
+              message: inspection.message || '检查点目录无效。'
+            });
+            return;
+          }
+          validatedResumeCheckpoint = inspection.path;
+          currentLogFilePath = path.join(configDir, `${path.basename(validatedResumeCheckpoint)}.log`);
+          clearInterval(detectionInterval);
+          console.log(`[Training] Resume session detected. Appending log to: ${currentLogFilePath}`);
+        }
+
         console.log(`[Training] Starting with Python: ${pythonExe}`);
         console.log(`[Training] Script: ${scriptPath}`);
 
         const pythonArgs = [scriptPath, '--config', configPath];
 
-        if (resumeFromCheckpoint && typeof resumeFromCheckpoint === 'string' && resumeFromCheckpoint.trim() !== '') {
-          pythonArgs.push('--resume_from_checkpoint', resumeFromCheckpoint.trim());
+        if (validatedResumeCheckpoint) {
+          pythonArgs.push('--resume_from_checkpoint', validatedResumeCheckpoint);
         }
         if (resetDataloader) pythonArgs.push('--reset_dataloader');
         if (resetOptimizerParams) pythonArgs.push('--reset_optimizer_params');
@@ -2215,7 +2443,6 @@ enable_ar_bucket = true
 
         // Initialize log persistence BEFORE spawning
         trainingLogQueue = [fullCommandStr];
-        logBuffer.push(fullCommandStr);
 
         if (currentLogFilePath) {
           try {
@@ -2223,6 +2450,8 @@ enable_ar_bucket = true
           } catch (err) {
             console.error("Failed to write command to session log:", err);
           }
+        } else {
+          logBuffer.push(fullCommandStr);
         }
 
         // Notify UI
@@ -2230,7 +2459,7 @@ enable_ar_bucket = true
 
         const cwd = path.dirname(scriptPath);
 
-        trainingProcess = spawn(spawnExe, spawnArgs, {
+        const spawnedTrainingProcess = spawn(spawnExe, spawnArgs, {
           cwd: cwd,
           detached: process.platform !== 'win32', // Needed for process group killing on Linux
           env: {
@@ -2242,8 +2471,9 @@ enable_ar_bucket = true
             PYTHONUNBUFFERED: '1'
           }
         });
+        trainingProcess = spawnedTrainingProcess;
 
-        _event.sender.send('training-status', { type: 'started', running: true, pid: trainingProcess.pid });
+        _event.sender.send('training-status', { type: 'started', running: true, pid: spawnedTrainingProcess.pid });
 
         // Robust log reader with encoding support (GBK fallback for Windows)
         let stdoutLineBuffer = '';
@@ -2270,7 +2500,7 @@ enable_ar_bucket = true
           }
         };
 
-        trainingProcess.stdout?.on('data', (data: Buffer) => {
+        spawnedTrainingProcess.stdout?.on('data', (data: Buffer) => {
           const content = decodeChunk(data, stdoutUtf8, stdoutGbk);
           stdoutLineBuffer += content;
 
@@ -2309,7 +2539,7 @@ enable_ar_bucket = true
           }
         });
 
-        trainingProcess.stderr?.on('data', (data: Buffer) => {
+        spawnedTrainingProcess.stderr?.on('data', (data: Buffer) => {
           const content = decodeChunk(data, stderrUtf8, stderrGbk);
           stderrLineBuffer += content;
 
@@ -2337,20 +2567,26 @@ enable_ar_bucket = true
           }
         });
 
-        trainingProcess.on('close', (code) => {
+        spawnedTrainingProcess.on('close', (code) => {
           console.log(`[Training] Exited with code ${code}`);
-          trainingProcess = null;
-          const statusType = code === 0 ? 'finished' : 'error';
-          _event.sender.send('training-status', { type: statusType, code, running: false });
+          if (trainingProcess === spawnedTrainingProcess) {
+            trainingProcess = null;
+            currentLogFilePath = null;
+            const statusType = code === 0 ? 'finished' : 'error';
+            _event.sender.send('training-status', { type: statusType, code, running: false });
+          }
         });
 
-        trainingProcess.on('error', (err) => {
+        spawnedTrainingProcess.on('error', (err) => {
           console.error(`[Training] Spawn error: ${err}`);
-          trainingProcess = null;
-          _event.sender.send('training-status', { type: 'error', message: err.message, running: false });
+          if (trainingProcess === spawnedTrainingProcess) {
+            trainingProcess = null;
+            currentLogFilePath = null;
+            _event.sender.send('training-status', { type: 'error', message: err.message, running: false });
+          }
         });
 
-        resolve({ success: true, pid: trainingProcess.pid });
+        resolve({ success: true, pid: spawnedTrainingProcess.pid });
 
       } catch (e: any) {
         console.error("[Training] Start exception:", e);
@@ -2362,22 +2598,24 @@ enable_ar_bucket = true
   ipcMain.handle('stop-training', async () => {
     if (trainingProcess) {
       console.log("[Training] Stopping...");
+      const processToStop = trainingProcess;
       try {
-        if (process.platform === 'win32' && trainingProcess.pid) {
-          exec(`taskkill /pid ${trainingProcess.pid} /T /F`);
-        } else if (process.platform === 'linux' && trainingProcess.pid) {
+        if (process.platform === 'win32' && processToStop.pid) {
+          exec(`taskkill /pid ${processToStop.pid} /T /F`);
+        } else if (process.platform === 'linux' && processToStop.pid) {
           // Kill the entire process group on Linux to clean up orphaned deepspeed children
           try {
-            process.kill(-trainingProcess.pid, 'SIGKILL');
+            process.kill(-processToStop.pid, 'SIGKILL');
           } catch (e) {
             console.error("[Training] Process group kill failed, trying normal kill:", e);
-            trainingProcess.kill('SIGKILL');
+            processToStop.kill('SIGKILL');
           }
         } else {
-          trainingProcess.kill();
+          processToStop.kill();
         }
-        trainingProcess = null;
-        currentLogFilePath = null;
+        // Keep the process registered until its close/error event fires. This
+        // prevents a new session from starting while the old process still owns
+        // its checkpoint directory and GPU resources.
         return { success: true };
       } catch (e: any) {
         return { success: false, error: e.message };
@@ -2418,7 +2656,7 @@ enable_ar_bucket = true
 
       const files = fs.readdirSync(configDir).filter(f => {
         try {
-          return f.endsWith('.log') && /^\d{8}_\d{2}-\d{2}-\d{2}\.log$/.test(f);
+          return f.endsWith('.log') && TRAINING_SESSION_NAME_PATTERN.test(f.slice(0, -4));
         } catch { return false; }
       });
 

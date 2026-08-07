@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -60,6 +61,8 @@ is_tool_manually_stopped = False
 tool_log_buffer: list[str] = []
 
 training_process: asyncio.subprocess.Process | None = None
+training_start_lock = asyncio.Lock()
+TRAINING_SESSION_NAME_PATTERN = re.compile(r"^\d{8}_\d{2}-\d{2}-\d{2}$")
 training_log_queue: list[str] = []
 current_log_file_path: str | None = None
 cached_output_folder: str | None = None
@@ -91,6 +94,154 @@ def save_settings(settings: dict[str, Any]) -> None:
 
 def resolve_backend_path(sub_path: str) -> Path:
     return APP_DIR / sub_path
+
+
+def get_training_output_directory(config_path: str | Path) -> Path:
+    config_path = Path(config_path)
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    configured_output_dir = config.get("output_dir")
+    if not isinstance(configured_output_dir, str) or not configured_output_dir.strip():
+        raise ValueError("trainconfig.toml 中缺少 output_dir")
+
+    output_dir = Path(configured_output_dir.strip())
+    if output_dir.is_absolute():
+        return output_dir.resolve()
+
+    is_linux = sys.platform.startswith("linux")
+    training_script = resolve_backend_path("backend/core_linux/train.py" if is_linux else "backend/core/train.py")
+    return (training_script.parent / output_dir).resolve()
+
+
+def inspect_training_checkpoint_directory(run_directory: str | Path) -> dict[str, Any]:
+    run_directory = Path(run_directory).resolve()
+    if not run_directory.exists():
+        return {
+            "valid": False,
+            "path": str(run_directory),
+            "errorCode": "checkpoint_not_directory",
+            "message": "检查点目录不存在。请选择包含 latest 文件的训练运行目录。",
+        }
+    if not run_directory.is_dir():
+        return {
+            "valid": False,
+            "path": str(run_directory),
+            "errorCode": "checkpoint_not_directory",
+            "message": "检查点必须是文件夹，不能选择文件。",
+        }
+
+    latest_path = run_directory / "latest"
+    if not latest_path.is_file():
+        selected_tag_folder = run_directory.name.startswith("global_step") and (run_directory.parent / "latest").is_file()
+        return {
+            "valid": False,
+            "path": str(run_directory),
+            "errorCode": "checkpoint_select_run_root" if selected_tag_folder else "checkpoint_missing_latest",
+            "message": (
+                f"请选择上一级训练运行目录 {run_directory.parent}，不要直接选择 {run_directory.name}。"
+                if selected_tag_folder
+                else "该文件夹不是可恢复的训练运行目录：缺少 latest 文件。"
+            ),
+        }
+
+    if latest_path.stat().st_size > 4096:
+        return {
+            "valid": False,
+            "path": str(run_directory),
+            "errorCode": "checkpoint_invalid_latest",
+            "message": "latest 文件内容异常，无法作为检查点标签读取。",
+        }
+
+    try:
+        latest_tag = latest_path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        latest_tag = ""
+    if not latest_tag or latest_tag in {".", ".."} or re.fullmatch(r"[A-Za-z0-9._-]+", latest_tag) is None:
+        return {
+            "valid": False,
+            "path": str(run_directory),
+            "errorCode": "checkpoint_invalid_latest",
+            "message": "latest 文件中的检查点标签无效。",
+        }
+
+    tag_directory = run_directory / latest_tag
+    if not tag_directory.is_dir():
+        return {
+            "valid": False,
+            "path": str(run_directory),
+            "latestTag": latest_tag,
+            "errorCode": "checkpoint_missing_tag_directory",
+            "message": f"latest 指向的检查点文件夹 {latest_tag} 不存在。",
+        }
+
+    if not any(candidate.is_file() and candidate.stat().st_size > 0 for candidate in tag_directory.glob("*_model_states.pt")):
+        return {
+            "valid": False,
+            "path": str(run_directory),
+            "latestTag": latest_tag,
+            "errorCode": "checkpoint_missing_model_state",
+            "message": f"检查点文件夹 {latest_tag} 中没有 DeepSpeed model state。",
+        }
+
+    step = None
+    if latest_tag.startswith("global_step") and latest_tag.removeprefix("global_step").isdigit():
+        step = int(latest_tag.removeprefix("global_step"))
+
+    modified_at = max(run_directory.stat().st_mtime, latest_path.stat().st_mtime, tag_directory.stat().st_mtime) * 1000
+    return {
+        "valid": True,
+        "path": str(run_directory),
+        "latestTag": latest_tag,
+        "step": step,
+        "modifiedAt": modified_at,
+    }
+
+
+def resolve_resume_checkpoint(config_path: str | Path, requested_path: str) -> dict[str, Any]:
+    output_dir = get_training_output_directory(config_path)
+    trimmed_path = requested_path.strip()
+    checkpoint_path = Path(trimmed_path)
+    if not checkpoint_path.is_absolute():
+        if trimmed_path in {".", ".."} or re.fullmatch(r"[A-Za-z0-9._-]+", trimmed_path) is None:
+            return {
+                "valid": False,
+                "path": trimmed_path,
+                "errorCode": "checkpoint_relative_name_only",
+                "message": "相对路径只能填写输出目录下的运行文件夹名称；其他位置请填写绝对路径。",
+            }
+        checkpoint_path = output_dir / checkpoint_path
+    try:
+        return inspect_training_checkpoint_directory(checkpoint_path)
+    except (OSError, UnicodeError):
+        return {
+            "valid": False,
+            "path": str(checkpoint_path.resolve()),
+            "errorCode": "checkpoint_unreadable",
+            "message": "检查点目录无法读取或内容不完整。",
+        }
+
+
+def list_training_checkpoints(config_path: str | Path) -> dict[str, Any]:
+    output_dir = get_training_output_directory(config_path)
+    checkpoints: list[dict[str, Any]] = []
+    if output_dir.is_dir():
+        for child in output_dir.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                inspection = inspect_training_checkpoint_directory(child)
+            except (OSError, UnicodeError):
+                continue
+            if not inspection["valid"]:
+                continue
+            checkpoints.append({
+                "name": child.name,
+                "path": inspection["path"],
+                "latestTag": inspection["latestTag"],
+                "step": inspection.get("step"),
+                "modifiedAt": inspection["modifiedAt"],
+            })
+    checkpoints.sort(key=lambda checkpoint: checkpoint["modifiedAt"], reverse=True)
+    return {"outputDir": str(output_dir), "checkpoints": checkpoints}
 
 
 def resolve_models_root() -> dict[str, str]:
@@ -713,6 +864,24 @@ def get_training_status():
     return {"running": training_process is not None, "pid": getattr(training_process, "pid", None), "currentLogFilePath": current_log_file_path, "logs": training_log_queue}
 
 
+@channel("list-resume-checkpoints")
+def list_resume_checkpoints(config_path: str):
+    if not config_path or not Path(config_path).is_file():
+        raise ValueError("Missing or invalid configPath")
+    return list_training_checkpoints(config_path)
+
+
+@channel("validate-resume-checkpoint")
+def validate_resume_checkpoint(payload: dict[str, Any]):
+    config_path = payload.get("configPath", "")
+    checkpoint_path = payload.get("checkpointPath", "")
+    if not config_path or not Path(config_path).is_file():
+        return {"valid": False, "errorCode": "checkpoint_invalid_config", "message": "训练配置文件不存在。"}
+    if not isinstance(checkpoint_path, str) or not checkpoint_path.strip():
+        return {"valid": True, "path": ""}
+    return resolve_resume_checkpoint(config_path, checkpoint_path)
+
+
 @channel("get-training-logs")
 def get_training_logs(log_path: str):
     if not log_path or not Path(log_path).exists():
@@ -729,7 +898,7 @@ def get_training_sessions(config_path: str):
         return []
     sessions = []
     for log_file in sorted(config_dir.glob("*.log"), reverse=True):
-        if len(log_file.stem) == 17 and log_file.stem[8] == "_":
+        if TRAINING_SESSION_NAME_PATTERN.fullmatch(log_file.stem):
             sessions.append({"id": log_file.stem, "path": str(log_file), "timestamp": log_file.stat().st_mtime * 1000, "hasLog": True})
     return sessions
 
@@ -749,9 +918,14 @@ async def training_reader(line: str, log_buffer: list[str]) -> None:
     if match:
         await broadcast("training-speed", {"iterTime": float(match.group(1)), "samplesPerSec": float(match.group(2))})
     if current_log_file_path:
-        Path(current_log_file_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(current_log_file_path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        try:
+            Path(current_log_file_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(current_log_file_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError as exc:
+            print(f"[WebUI] Failed to persist training log, continuing in memory: {exc}")
+            current_log_file_path = None
+            log_buffer.append(line)
     else:
         log_buffer.append(line)
 
@@ -765,7 +939,7 @@ async def detect_training_log(config_path: Path, base_output_dir: str, start_tim
         await asyncio.sleep(5)
         if not base.exists():
             continue
-        sessions = [p for p in base.iterdir() if p.is_dir() and len(p.name) == 17 and p.name[8] == "_"]
+        sessions = [p for p in base.iterdir() if p.is_dir() and TRAINING_SESSION_NAME_PATTERN.fullmatch(p.name)]
         if not sessions:
             continue
         newest = sorted(sessions, key=lambda p: p.name, reverse=True)[0]
@@ -776,8 +950,7 @@ async def detect_training_log(config_path: Path, base_output_dir: str, start_tim
                 log_buffer.clear()
 
 
-@channel("start-training")
-async def start_training(payload: dict[str, Any]):
+async def _start_training(payload: dict[str, Any]):
     global training_process, current_log_file_path, training_log_queue
     if training_process is not None:
         return {"success": False, "message": "训练已经在进行中"}
@@ -787,10 +960,9 @@ async def start_training(payload: dict[str, Any]):
 
     base_output_dir = ""
     try:
-        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
-        base_output_dir = str(config.get("output_dir", ""))
-    except Exception:
-        pass
+        base_output_dir = str(get_training_output_directory(config_path))
+    except Exception as exc:
+        return {"success": False, "error": f"Failed to resolve output_dir: {exc}"}
 
     project_root = PROJECT_ROOT
     python_exe = get_python_exe(project_root)
@@ -802,9 +974,22 @@ async def start_training(payload: dict[str, Any]):
     if not script_path.exists():
         return {"success": False, "error": f"Train script not found at {script_path}"}
 
+    validated_resume_checkpoint = ""
+    requested_resume_checkpoint = payload.get("resume_from_checkpoint")
+    if isinstance(requested_resume_checkpoint, str) and requested_resume_checkpoint.strip():
+        inspection = resolve_resume_checkpoint(config_path, requested_resume_checkpoint)
+        if not inspection["valid"]:
+            return {
+                "success": False,
+                "code": inspection.get("errorCode"),
+                "message": inspection.get("message", "检查点目录无效。"),
+            }
+        validated_resume_checkpoint = inspection["path"]
+
     python_args = [str(script_path), "--config", str(config_path)]
+    if validated_resume_checkpoint:
+        python_args.extend(["--resume_from_checkpoint", validated_resume_checkpoint])
     mapping = {
-        "resume_from_checkpoint": "--resume_from_checkpoint",
         "dump_dataset": "--dump_dataset",
     }
     for key, flag in mapping.items():
@@ -833,13 +1018,15 @@ async def start_training(payload: dict[str, Any]):
     local_size = str(payload.get("num_gpus") or 1) if is_linux else "1"
 
     current_log_file_path = None
+    if validated_resume_checkpoint:
+        current_log_file_path = str(config_path.parent / f"{Path(validated_resume_checkpoint).name}.log")
     training_log_queue = []
     log_buffer: list[str] = []
     command_line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Command]: {spawn_exe} {' '.join(spawn_args)}"
     await training_reader(command_line, log_buffer)
 
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    training_process = await asyncio.create_subprocess_exec(
+    spawned_process = await asyncio.create_subprocess_exec(
         spawn_exe,
         *spawn_args,
         cwd=str(script_path.parent),
@@ -856,34 +1043,49 @@ async def start_training(payload: dict[str, Any]):
         creationflags=creationflags,
         start_new_session=os.name != "nt",
     )
-    await broadcast("training-status", {"type": "started", "running": True, "pid": training_process.pid})
+    training_process = spawned_process
+    await broadcast("training-status", {"type": "started", "running": True, "pid": spawned_process.pid})
 
     async def watch() -> None:
         global training_process
-        proc = training_process
-        if proc is None:
-            return
-        await asyncio.gather(read_stream_lines(proc.stdout, lambda line: training_reader(line, log_buffer)), read_stream_lines(proc.stderr, lambda line: training_reader(line, log_buffer)))
-        code = await proc.wait()
-        training_process = None
-        status_type = "finished" if code == 0 else "error"
-        await broadcast("training-status", {"type": status_type, "code": code, "running": False})
+        await asyncio.gather(
+            read_stream_lines(spawned_process.stdout, lambda line: training_reader(line, log_buffer)),
+            read_stream_lines(spawned_process.stderr, lambda line: training_reader(line, log_buffer)),
+        )
+        code = await spawned_process.wait()
+        if training_process is spawned_process:
+            training_process = None
+            status_type = "finished" if code == 0 else "error"
+            await broadcast("training-status", {"type": status_type, "code": code, "running": False})
 
     asyncio.create_task(watch())
-    if base_output_dir:
+    if base_output_dir and not validated_resume_checkpoint:
         asyncio.create_task(detect_training_log(config_path, base_output_dir, time.time(), log_buffer))
-    return {"success": True, "pid": training_process.pid}
+    return {"success": True, "pid": spawned_process.pid}
+
+
+@channel("start-training")
+async def start_training(payload: dict[str, Any]):
+    async with training_start_lock:
+        return await _start_training(payload)
 
 
 @channel("stop-training")
-def stop_training():
+async def stop_training():
     global training_process, current_log_file_path
-    if training_process is not None:
-        kill_process_tree(training_process)
-        training_process = None
-        current_log_file_path = None
-        return {"success": True}
-    return {"success": False, "message": "No training running"}
+    async with training_start_lock:
+        if training_process is not None:
+            process_to_stop = training_process
+            kill_process_tree(process_to_stop)
+            try:
+                await asyncio.wait_for(asyncio.shield(process_to_stop.wait()), timeout=15)
+            except asyncio.TimeoutError:
+                return {"success": False, "message": "训练进程仍在停止中，请稍后再试。"}
+            if training_process is process_to_stop:
+                training_process = None
+            current_log_file_path = None
+            return {"success": True}
+        return {"success": False, "message": "No training running"}
 
 
 @channel("run-python-script-capture")

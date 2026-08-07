@@ -4,16 +4,108 @@ import { GlassCard } from './ui/GlassCard';
 import { GlassInput } from './ui/GlassInput';
 import { HelpIcon } from './ui/HelpIcon';
 import { useTranslation } from 'react-i18next';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, LoaderCircle, RefreshCw } from 'lucide-react';
 
-export interface StartParamsConfigProps {
-    data: any;
-    onChange: (data: any) => void;
+interface TrainingCheckpointOption {
+    name: string;
+    path: string;
+    latestTag: string;
+    step: number | null;
+    modifiedAt: number;
 }
 
-export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
+interface CheckpointDiscoveryResult {
+    outputDir: string;
+    checkpoints: TrainingCheckpointOption[];
+}
+
+interface PathInputProps {
+    label: string;
+    helpText?: string;
+    name: string;
+    value: string;
+    placeholder?: string;
+    isFolder?: boolean;
+    className?: string;
+    list?: string;
+    browseTitle: string;
+    defaultPath?: string;
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    onPickPath: (name: string, isFolder: boolean, defaultPath?: string) => void;
+}
+
+function PathInput({
+    label,
+    helpText,
+    name,
+    value,
+    placeholder,
+    isFolder = false,
+    className,
+    list,
+    browseTitle,
+    defaultPath,
+    onChange,
+    onPickPath
+}: PathInputProps) {
+    return (
+        <div className={className ?? ''}>
+            <div className="flex items-end gap-2">
+                <div className="min-w-0 flex-1">
+                    <GlassInput
+                        label={label}
+                        helpText={helpText}
+                        name={name}
+                        value={value}
+                        onChange={onChange}
+                        placeholder={placeholder}
+                        list={list}
+                        autoComplete="off"
+                        className="h-11"
+                    />
+                </div>
+                <button
+                    type="button"
+                    onClick={() => onPickPath(name, isFolder, defaultPath)}
+                    className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-gray-200 bg-white/40 text-muted-foreground shadow-sm backdrop-blur-md transition-colors hover:border-gray-300 hover:bg-black/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 dark:border-white/10 dark:bg-white/5 dark:hover:border-white/20 dark:hover:bg-white/10"
+                    title={browseTitle}
+                    aria-label={browseTitle}
+                >
+                    <FolderOpen className="h-4 w-4" />
+                </button>
+            </div>
+        </div>
+    );
+}
+
+export interface StartParamsConfigProps {
+    data: StartParamsData;
+    onChange: React.Dispatch<React.SetStateAction<StartParamsData>>;
+    configPath?: string | null;
+}
+
+export interface StartParamsData {
+    resume_from_checkpoint: string;
+    regenerate_cache: boolean;
+    trust_cache: boolean;
+    cache_only: boolean;
+    reset_dataloader: boolean;
+    reset_optimizer_params: boolean;
+    i_know_what_i_am_doing: boolean;
+    dump_dataset: string;
+    num_gpus: number;
+}
+
+export function StartParamsConfig({ data, onChange, configPath }: StartParamsConfigProps) {
     const { t } = useTranslation();
     const [platform, setPlatform] = React.useState<string>('');
+    const [checkpointDiscovery, setCheckpointDiscovery] = React.useState<CheckpointDiscoveryResult>({
+        outputDir: '',
+        checkpoints: []
+    });
+    const [isScanningCheckpoints, setIsScanningCheckpoints] = React.useState(false);
+    const [checkpointScanError, setCheckpointScanError] = React.useState('');
+    const checkpointRequestId = React.useRef(0);
 
     React.useEffect(() => {
         const fetchPlatform = async () => {
@@ -28,47 +120,65 @@ export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
         fetchPlatform();
     }, []);
 
+    const scanCheckpoints = React.useCallback(async () => {
+        const requestId = ++checkpointRequestId.current;
+        if (!configPath) {
+            setCheckpointDiscovery({ outputDir: '', checkpoints: [] });
+            setCheckpointScanError('');
+            setIsScanningCheckpoints(false);
+            return;
+        }
+
+        setIsScanningCheckpoints(true);
+        setCheckpointScanError('');
+        setCheckpointDiscovery({ outputDir: '', checkpoints: [] });
+        try {
+            const result = await ipc.invoke('list-resume-checkpoints', configPath) as CheckpointDiscoveryResult;
+            if (requestId !== checkpointRequestId.current) return;
+            setCheckpointDiscovery({
+                outputDir: result?.outputDir ?? '',
+                checkpoints: Array.isArray(result?.checkpoints) ? result.checkpoints : []
+            });
+        } catch (error) {
+            if (requestId !== checkpointRequestId.current) return;
+            console.error('Failed to scan training checkpoints:', error);
+            setCheckpointDiscovery({ outputDir: '', checkpoints: [] });
+            setCheckpointScanError(error instanceof Error ? error.message : String(error));
+        } finally {
+            if (requestId === checkpointRequestId.current) {
+                setIsScanningCheckpoints(false);
+            }
+        }
+    }, [configPath]);
+
+    React.useEffect(() => {
+        void scanCheckpoints();
+        return () => {
+            checkpointRequestId.current += 1;
+        };
+    }, [scanCheckpoints]);
+
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-        onChange({ ...data, [e.target.name]: value });
+        onChange((current) => ({ ...current, [e.target.name]: value }));
     };
 
-    const handlePickPath = async (name: string, isFolder: boolean = false) => {
+    const handlePickPath = async (name: string, isFolder: boolean = false, defaultPath?: string) => {
         try {
             // @ts-ignore
             const result = await ipc.invoke('dialog:openFile', {
                 properties: isFolder ? ['openDirectory'] : ['openFile'],
-                filters: isFolder ? [] : [{ name: 'Model Files', extensions: ['safetensors', 'pt', 'ckpt', 'bin'] }]
+                filters: isFolder ? [] : [{ name: 'Model Files', extensions: ['safetensors', 'pt', 'ckpt', 'bin'] }],
+                ...(defaultPath ? { defaultPath } : {})
             });
 
             if (!result.canceled && result.filePaths.length > 0) {
-                onChange({ ...data, [name]: result.filePaths[0] });
+                onChange((current) => ({ ...current, [name]: result.filePaths[0] }));
             }
         } catch (e) {
             console.error("Failed to pick path:", e);
         }
     };
-
-    const PathInput = ({ label, helpText, name, placeholder, isFolder = false, className }: { label: string, helpText?: string, name: string, placeholder?: string, isFolder?: boolean, className?: string }) => (
-        <div className={`relative ${className}`}>
-            <GlassInput
-                label={label}
-                helpText={helpText}
-                name={name}
-                value={data[name] ?? ''}
-                onChange={handleChange}
-                placeholder={placeholder}
-            />
-            <button
-                type="button"
-                onClick={() => handlePickPath(name, isFolder)}
-                className="absolute right-3 bottom-2.5 p-1 rounded-lg bg-white/5 hover:bg-white/10 text-muted-foreground transition-colors hover:text-primary"
-                title={t('project.open')}
-            >
-                <FolderOpen className="w-4 h-4" />
-            </button>
-        </div>
-    );
 
     return (
         <GlassCard className="p-6">
@@ -78,22 +188,74 @@ export function StartParamsConfig({ data, onChange }: StartParamsConfigProps) {
             </div>
 
             <div className="grid gap-6 md:grid-cols-2">
-                <PathInput
-                    label={t('start_params.resume_from_checkpoint')}
-                    helpText={t('help.resume_from_checkpoint')}
-                    name="resume_from_checkpoint"
-                    placeholder="C:\ComfyUI\20260127_18-57-41"
-                    isFolder={true}
-                    className="md:col-span-2"
-                />
+                <div className="md:col-span-2 space-y-2">
+                    <PathInput
+                        label={t('start_params.resume_from_checkpoint')}
+                        helpText={t('help.resume_from_checkpoint')}
+                        name="resume_from_checkpoint"
+                        value={data.resume_from_checkpoint ?? ''}
+                        placeholder={t('start_params.resume_placeholder')}
+                        isFolder={true}
+                        list="detected-resume-checkpoints"
+                        browseTitle={t('start_params.choose_checkpoint_folder')}
+                        defaultPath={checkpointDiscovery.outputDir}
+                        onChange={handleChange}
+                        onPickPath={handlePickPath}
+                    />
+                    <datalist id="detected-resume-checkpoints">
+                        {checkpointDiscovery.checkpoints.map((checkpoint) => (
+                            <option
+                                key={checkpoint.path}
+                                value={checkpoint.path}
+                                label={`${checkpoint.name} · ${checkpoint.latestTag}`}
+                            />
+                        ))}
+                    </datalist>
+                    <div className="flex items-start justify-between gap-3 px-1 text-xs text-muted-foreground">
+                        <div className="min-w-0">
+                            {isScanningCheckpoints ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                                    {t('start_params.scanning_checkpoints')}
+                                </span>
+                            ) : checkpointScanError ? (
+                                <span className="text-amber-500" title={checkpointScanError}>
+                                    {t('start_params.checkpoint_scan_failed')}
+                                </span>
+                            ) : checkpointDiscovery.checkpoints.length > 0 ? (
+                                <span title={checkpointDiscovery.outputDir}>
+                                    {t('start_params.checkpoints_found', { count: checkpointDiscovery.checkpoints.length })}
+                                </span>
+                            ) : (
+                                <span title={checkpointDiscovery.outputDir}>
+                                    {t('start_params.no_checkpoints_found')}
+                                </span>
+                            )}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void scanCheckpoints()}
+                            disabled={!configPath || isScanningCheckpoints}
+                            className="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-white/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                            title={t('start_params.refresh_checkpoints')}
+                        >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            {t('start_params.refresh')}
+                        </button>
+                    </div>
+                </div>
 
                 <PathInput
                     label={t('start_params.dump_dataset')}
                     helpText={t('help.dump_dataset')}
                     name="dump_dataset"
-                    placeholder="C:\debug\dataset"
+                    value={data.dump_dataset ?? ''}
+                    placeholder="C:\\debug\\dataset"
                     isFolder={true}
                     className="md:col-span-2"
+                    browseTitle={t('project.open')}
+                    onChange={handleChange}
+                    onPickPath={handlePickPath}
                 />
 
                 <div className="flex flex-col gap-4">

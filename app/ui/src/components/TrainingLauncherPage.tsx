@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { GlassCard } from './ui/GlassCard';
 import { GlassButton } from './ui/GlassButton';
 import { useGlassToast } from './ui/GlassToast';
-import { StartParamsConfig } from './StartParamsConfig';
+import { StartParamsConfig, StartParamsData } from './StartParamsConfig';
 import { cn } from '@/lib/utils';
 import { parse } from 'smol-toml';
 import { TrainingLogViewer } from './TrainingLogViewer';
@@ -23,6 +23,18 @@ type MiniMaxValidationKey =
     | 'validation.invalid_video_clip_mode';
 
 type TomlRecord = Record<string, unknown>;
+
+const DEFAULT_START_PARAMS: StartParamsData = {
+    resume_from_checkpoint: '',
+    regenerate_cache: false,
+    trust_cache: false,
+    cache_only: false,
+    reset_dataloader: false,
+    reset_optimizer_params: false,
+    i_know_what_i_am_doing: false,
+    dump_dataset: '',
+    num_gpus: 1
+};
 
 const isTomlRecord = (value: unknown): value is TomlRecord => (
     typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -86,18 +98,8 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
     const [isTraining, setIsTraining] = useState(false);
-    const [startParams, setStartParams] = useState({
-        resume_from_checkpoint: '',
-        regenerate_cache: false,
-        trust_cache: false,
-        cache_only: false,
-        reset_dataloader: false,
-        reset_optimizer_params: false,
-        i_know_what_i_am_doing: false,
-        dump_dataset: '',
-        num_gpus: 1
-    });
-    const [isLoaded, setIsLoaded] = useState(false);
+    const [startParams, setStartParams] = useState<StartParamsData>(() => ({ ...DEFAULT_START_PARAMS }));
+    const [loadedProjectPath, setLoadedProjectPath] = useState<string | null>(null);
     const [configSummary, setConfigSummary] = useState<{
         model_type: string;
         epochs: number;
@@ -105,6 +107,7 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
         max_steps?: number;
     } | null>(null);
     const [progressEstimate, setProgressEstimate] = useState<TrainingProgressEstimate | null>(null);
+    const trainingConfigPath = projectPath ? `${projectPath}/trainconfig.toml` : null;
 
     // Initial check for training status and status updates
     useEffect(() => {
@@ -146,44 +149,43 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
 
     // Load saved launcher params for this project
     useEffect(() => {
+        let cancelled = false;
         const loadParams = async () => {
             if (!projectPath) {
-                setIsLoaded(false);
+                setLoadedProjectPath(null);
                 return;
             }
+            setLoadedProjectPath(null);
             try {
                 const savedParams = await ipc.invoke('get-project-launch-params', projectPath);
+                if (cancelled) return;
                 if (savedParams && Object.keys(savedParams).length > 0) {
-                    setStartParams(prev => ({
-                        ...prev,
+                    setStartParams({
+                        ...DEFAULT_START_PARAMS,
                         ...savedParams
-                    }));
+                    });
                 } else {
                     // Reset to defaults if no saved params for this project
-                    setStartParams({
-                        resume_from_checkpoint: '',
-                        regenerate_cache: false,
-                        trust_cache: false,
-                        cache_only: false,
-                        reset_dataloader: false,
-                        reset_optimizer_params: false,
-                        i_know_what_i_am_doing: false,
-                        dump_dataset: '',
-                        num_gpus: 1
-                    });
+                    setStartParams({ ...DEFAULT_START_PARAMS });
                 }
-                setIsLoaded(true);
+                setLoadedProjectPath(projectPath);
             } catch (e) {
                 console.error("Failed to load project launcher params:", e);
-                setIsLoaded(true); // Still mark as loaded to allow editing
+                if (!cancelled) {
+                    setStartParams({ ...DEFAULT_START_PARAMS });
+                    setLoadedProjectPath(projectPath); // Still allow editing when no saved params can be loaded.
+                }
             }
         };
-        loadParams();
+        void loadParams();
+        return () => {
+            cancelled = true;
+        };
     }, [projectPath]);
 
     // Save launcher params when changed (debounced)
     useEffect(() => {
-        if (!isLoaded || !projectPath) return;
+        if (!projectPath || loadedProjectPath !== projectPath) return;
 
         const timer = setTimeout(() => {
             ipc.invoke('save-project-launch-params', {
@@ -193,15 +195,14 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
         }, 1000);
 
         return () => clearTimeout(timer);
-    }, [startParams, projectPath, isLoaded]);
+    }, [startParams, projectPath, loadedProjectPath]);
 
     // Load current config for summary and to ensure paths exist
     useEffect(() => {
         const loadConfig = async () => {
-            if (!projectPath) return;
-            const configPath = `${projectPath}/trainconfig.toml`;
+            if (!projectPath || !trainingConfigPath) return;
             try {
-                const content = await ipc.invoke('read-file', configPath);
+                const content = await ipc.invoke('read-file', trainingConfigPath);
                 if (content) {
                     const parsed = parse(content) as any;
                     let outputDir = parsed.output_dir || '';
@@ -226,7 +227,7 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
             }
         };
         loadConfig();
-    }, [projectPath, startParams.num_gpus]);
+    }, [projectPath, trainingConfigPath, startParams.num_gpus]);
 
     const handleStartTraining = async () => {
         if (!projectPath) {
@@ -246,8 +247,13 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
                 return;
             }
 
-            const configPath = `${projectPath}/trainconfig.toml`;
-            const configContent = await ipc.invoke('read-file', configPath);
+            if (loadedProjectPath !== projectPath) {
+                showToast(t('training.launch_params_loading'), 'error');
+                return;
+            }
+
+            if (!trainingConfigPath) return;
+            const configContent = await ipc.invoke('read-file', trainingConfigPath);
             const parsedConfig = parse(configContent);
             const miniMaxValidationError = validateMiniMaxH3Config(parsedConfig);
             if (miniMaxValidationError) {
@@ -258,7 +264,7 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
             setIsTraining(true);
 
             const results = await ipc.invoke('start-training', {
-                configPath: configPath,
+                configPath: trainingConfigPath,
                 ...startParams
             });
 
@@ -290,6 +296,7 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
 
                 <GlassButton
                     onClick={handleStartTraining}
+                    disabled={!isTraining && loadedProjectPath !== projectPath}
                     className={cn(
                         "px-8 h-12 text-lg font-bold text-white border-none shadow-xl transition-all duration-500 hover:scale-105 active:scale-95",
                         isTraining
@@ -373,7 +380,7 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
 
                 {/* Launcher Params */}
                 <div className="md:col-span-2">
-                    <StartParamsConfig data={startParams} onChange={setStartParams} />
+                    <StartParamsConfig data={startParams} onChange={setStartParams} configPath={trainingConfigPath} />
                 </div>
             </div>
 
