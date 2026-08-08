@@ -17,7 +17,6 @@ interface TrainingLauncherPageProps {
 
 type MiniMaxValidationKey =
     | 'validation.minimax_required_paths'
-    | 'validation.minimax_batch_size'
     | 'validation.minimax_blocks_to_swap'
     | 'validation.minimax_shift'
     | 'validation.invalid_video_clip_mode';
@@ -40,14 +39,6 @@ const isTomlRecord = (value: unknown): value is TomlRecord => (
     typeof value === 'object' && value !== null && !Array.isArray(value)
 );
 
-const isBatchSizeOne = (value: unknown): boolean => {
-    if (value === undefined || value === null || value === '') return true;
-    if (Array.isArray(value)) {
-        return value.every((entry) => Array.isArray(entry) && Number(entry[1]) === 1);
-    }
-    return Number(value) === 1;
-};
-
 const validateMiniMaxH3Config = (configValue: unknown): MiniMaxValidationKey | null => {
     if (!isTomlRecord(configValue)) return null;
 
@@ -64,16 +55,6 @@ const validateMiniMaxH3Config = (configValue: unknown): MiniMaxValidationKey | n
     const requiredPaths = [model.diffusion_model, model.vae, model.audio_vae, textEncoderPath];
     if (requiredPaths.some((value) => typeof value !== 'string' || value.trim() === '')) {
         return 'validation.minimax_required_paths';
-    }
-
-    const batchSizeKeys = [
-        'micro_batch_size_per_gpu',
-        'image_micro_batch_size_per_gpu',
-        'eval_micro_batch_size_per_gpu',
-        'eval_image_micro_batch_size_per_gpu'
-    ];
-    if (batchSizeKeys.some((key) => !isBatchSizeOne(config[key]))) {
-        return 'validation.minimax_batch_size';
     }
 
     const blocksToSwap = Number(config.blocks_to_swap ?? 0);

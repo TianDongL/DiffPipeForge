@@ -712,6 +712,7 @@ text_encoders = [
 dtype = 'bfloat16'
 timestep_sample_method = 'uniform'  # 也可使用 'logit_normal'
 shift = 8  # 最佳取值尚未确定；对于视频，1 明显过低。
+image_shift = 1  # 图片建议使用 1 或略高于 1。
 ```
 
 所有组件均须使用 ComfyUI 格式文件，保存的模型和 LoRA 同样采用 ComfyUI 格式。现在可以直接在量化权重上训练 LoRA；上游作者推荐 int8 convrot 扩散模型和文本编码器，因为其速度更快、显存占用更低，并能保持更好的质量。直接在量化权重上训练时，不要设置 `diffusion_model_dtype`。量化基座不能进行全量微调；如需全量微调，请使用非量化模型。
@@ -719,12 +720,12 @@ shift = 8  # 最佳取值尚未确定；对于视频，1 明显过低。
 当前限制与行为：
 
 - 仅支持文生图和文生视频训练。若源视频包含音轨，音频会自动参与训练（即实际上的 T2VA）。目前不支持参考图、编辑、图生视频或首尾帧条件训练。
-- 训练 micro-batch size 必须为 `1`，可通过 `gradient_accumulation_steps` 模拟更大的 batch。
+- 现已支持大于 `1` 的 batch size。混合图片/视频训练可单独设置 `image_micro_batch_size_per_gpu`；上游示例使用 `8` 张图片，其显存开销约等于一个五秒视频。
 - MiniMax H3 固定按 24 fps 预处理视频、按 32 kHz 处理音频；无音轨视频和纯图片数据集均可训练。
 - LoRA 不训练 AdaLN 权重，因此同一个 LoRA 可同时兼容完整和剪枝版 H3 检查点。
 - 文档给出的 `blocks_to_swap` 最大值为 `48`；同时建议使用 `activation_checkpointing = 'unsloth'` 进一步降低显存占用。
 - 最佳时间步分布和 shift 尚未确定。`timestep_sample_method = 'uniform'` 配合 `shift = 12` 与默认推理调度一致；降低到 8 或更低可能有利于细节学习，但会牺牲大尺度结构与运动表现。
 - 训练会逐渐解除模型蒸馏，因此推理时可能需要 CFG。图片训练本身有效，但若只使用图片训练，可能削弱模型的视频与运动理解能力。
-- 大型文本编码器在缓存结束后可能仍占用系统内存并导致内存不足。遇到这种情况时，请先完成缓存，重启应用，再复用已有缓存开始训练。
+- 训练器现在会在缓存后尝试释放 VAE 和文本编码器；上游说明仍可能有部分内存未完全释放。若因此内存不足，请先完成缓存，重启应用，再复用已有缓存开始训练。
 
-训练前请完整阅读双语版 [MiniMax H3 训练说明](minimax_h3_notes.md)。
+训练前请完整阅读双语版 [MiniMax H3 训练说明](minimax_h3_notes.md)，并参考 [MiniMax H3 示例配置](examples/minimax_h3_example.toml)。

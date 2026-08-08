@@ -748,6 +748,7 @@ export function ModelTrainingPage({
                         if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'uniform'}'`);
                         lines.push(`shift = ${formatValue(m.shift ?? 8)}`);
+                        lines.push(`image_shift = ${formatValue(m.image_shift ?? 1)}`);
                         break;
                     }
 

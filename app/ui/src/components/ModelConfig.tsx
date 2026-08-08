@@ -196,7 +196,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
             case 'krea2':
                 return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal' };
             case 'minimax_h3':
-                return { ...base, diffusion_model_dtype: '', timestep_sample_method: 'uniform', shift: 8 };
+                return { ...base, diffusion_model_dtype: '', timestep_sample_method: 'uniform', shift: 8, image_shift: 1 };
             default:
                 return base;
         }
@@ -705,6 +705,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'uniform'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.minimax_shift')} name="shift" type="number" min="0.000001" value={formatNum(data.shift ?? 8)} onChange={handleChange} />
+                        <GlassInput label={t('model.image_shift')} helpText={t('help.minimax_image_shift')} name="image_shift" type="number" min="0.000001" value={formatNum(data.image_shift ?? 1)} onChange={handleChange} />
                         <div className="col-span-2 rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-200">
                             {t('help.minimax_audio')}
                         </div>
