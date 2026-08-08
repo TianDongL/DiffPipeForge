@@ -424,6 +424,7 @@
         "diffusion_model": "Diffusion 模型路径",
         "audio_vae": "音频 VAE 路径",
         "merge_adapters": "Merge Adapters",
+        "minimax_training_adapter": "训练 / 去蒸馏适配器",
         "diffusion_path": "Diffusion 路径",
         "llm_adapter_lr": "LLM Adapter 学习率"
     },
@@ -670,6 +671,7 @@
         "timestep_sample_method": "训练过程中采样时间步的方法。通常使用 logit_normal 以更关注图像细节。",
         "minimax_shift": "MiniMax H3 的时间步偏移。上游示例使用 8，接近推理调度时可使用 12。",
         "minimax_image_shift": "MiniMax H3 仅用于图片的可选时间步偏移。上游建议设为 1 或略高于 1；视频仍使用主 Shift。",
+        "minimax_training_adapter": "可选的第三方 MiniMax H3 训练/去蒸馏 LoRA。它会在训练新 LoRA 前合并到基础模型中，并不是本次训练最终输出的 LoRA。",
         "minimax_audio": "视频包含音轨时会自动训练音频；无音轨视频也可以使用。现已支持大于 1 的 batch size；量化检查点必须使用 LoRA/LoKr，不能做全量微调。",
         "minimax_blocks_to_swap": "MiniMax H3 最多支持交换 48 个模型块。",
         "model_type": "选择模型的加载架构。根据您的模型文件（单文件或文件夹）进行选择。",

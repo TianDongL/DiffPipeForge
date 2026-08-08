@@ -6,7 +6,7 @@
 
 ### Training behavior
 
-Any training gradually undistills MiniMax H3. Inference may therefore require CFG; the amount depends on the dataset size and training duration. A de-distillation adapter could address this, but none was available when upstream support was added. Another possible approach is a modified target that retains the model's distilled behavior by using its own unconditional prediction.
+Any training gradually undistills MiniMax H3. Inference may therefore require CFG; the amount depends on the dataset size and training duration. Ostris has since released an experimental [MiniMax H3 training adapter](https://huggingface.co/ostris/minimax_h3_training_adapter) that can be supplied through `[model].merge_adapters` before training a separate character or style LoRA. This third-party training/de-distillation adapter is merged into the base model and is distinct from the new LoRA configured under `[adapter]`.
 
 MiniMax H3 now supports batch sizes above `1`. Mixed image/video training can use `image_micro_batch_size_per_gpu` to give images a larger batch than videos; the upstream example uses `8` images for roughly the VRAM cost of one five-second video.
 
@@ -40,7 +40,7 @@ Only T2I and T2V training are implemented. Reference-image, edit, I2V, and first
 
 ### 训练行为
 
-任何训练都会让 MiniMax H3 逐渐解除蒸馏，因此推理时可能需要使用 CFG；所需强度取决于数据集规模和训练时长。去蒸馏适配器可能解决这一问题，但上游加入支持时尚无可用方案。另一种可能的方法是使用模型自身的无条件预测构造修改后的训练目标，从而保留原有蒸馏行为。
+任何训练都会让 MiniMax H3 逐渐解除蒸馏，因此推理时可能需要使用 CFG；所需强度取决于数据集规模和训练时长。Ostris 随后发布了实验性的 [MiniMax H3 训练适配器](https://huggingface.co/ostris/minimax_h3_training_adapter)，可以通过 `[model].merge_adapters` 加载，再训练独立的角色或风格 LoRA。这个第三方训练/去蒸馏适配器会合并到基础模型中，与 `[adapter]` 下配置并最终输出的新 LoRA 不是同一个文件。
 
 MiniMax H3 现已支持大于 `1` 的 batch size。混合图片/视频训练可以通过 `image_micro_batch_size_per_gpu` 为图片设置更大的批次；上游示例使用 `8` 张图片，其显存开销约等于一个五秒视频。
 

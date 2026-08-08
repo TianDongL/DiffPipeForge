@@ -765,6 +765,8 @@ dtype = 'bfloat16'
 timestep_sample_method = 'uniform'  # or 'logit_normal'
 shift = 8  # The optimal value is not yet known; 1 is much too low for video.
 image_shift = 1  # 1, or slightly above 1, appears suitable for images.
+# Optional third-party training/de-distillation adapter, merged before training the new LoRA:
+# merge_adapters = ['C:/path/to/minimax_h3_training_adapter_v1.safetensors']
 ```
 
 Use ComfyUI-format files for every component. Saved models and LoRAs are also in ComfyUI format. LoRAs can be trained directly on quantized weights; the upstream author recommends the int8 convrot diffusion model and text encoder because they are faster, use less VRAM, and preserve better quality. When training directly on quantized weights, leave `diffusion_model_dtype` unset. A quantized base model cannot be full fine-tuned; use a non-quantized model for full fine-tuning.
@@ -778,6 +780,7 @@ Current limitations and behavior:
 - `blocks_to_swap = 48` is the maximum documented value. `activation_checkpointing = 'unsloth'` is also recommended for reducing VRAM use.
 - The ideal timestep distribution and shift are not yet known. `timestep_sample_method = 'uniform'` with `shift = 12` matches the default inference schedule; a lower value such as 8 may improve fine detail at the cost of large-scale structure and motion.
 - Training gradually undistills the model, so inference may require CFG. Image training is valid, but training exclusively on images can weaken the model's video and motion understanding.
+- The optional third-party [Ostris training adapter](https://huggingface.co/ostris/minimax_h3_training_adapter) can be selected in the UI. It is merged into the base model before training and is separate from the character or style LoRA produced by the run.
 - The trainer now attempts to release the VAE and text encoder after caching. Upstream notes that some RAM may still remain allocated; if that causes an out-of-memory error, finish caching first, restart the application, and then begin training from the existing cache.
 
 Read the complete bilingual [MiniMax H3 training notes](minimax_h3_notes.md) before training, and see the [MiniMax H3 example configuration](examples/minimax_h3_example.toml).

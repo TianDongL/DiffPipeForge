@@ -749,6 +749,13 @@ export function ModelTrainingPage({
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'uniform'}'`);
                         lines.push(`shift = ${formatValue(m.shift ?? 8)}`);
                         lines.push(`image_shift = ${formatValue(m.image_shift ?? 1)}`);
+                        if (m.merge_adapters) {
+                            const adapters = Array.isArray(m.merge_adapters) ? m.merge_adapters : [m.merge_adapters];
+                            const adapterPaths = adapters.filter((adapter: unknown): adapter is string => typeof adapter === 'string' && adapter.trim() !== '');
+                            if (adapterPaths.length > 0) {
+                                lines.push(`merge_adapters = [${adapterPaths.map((adapter: string) => `'${adapter.replace(/\\/g, '/')}'`).join(', ')}]`);
+                            }
+                        }
                         break;
                     }
 

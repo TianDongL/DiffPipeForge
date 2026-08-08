@@ -182,7 +182,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
             case 'auraflow':
                 return { ...base, transformer_dtype: 'float8', timestep_sample_method: 'logit_normal', max_sequence_length: 768 };
             case 'z_image':
-                return { ...base };
+                return { ...base, merge_adapters: '' };
             case 'hunyuan_video_15':
                 return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal', shift: 1 };
             case 'flux2':
@@ -196,7 +196,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
             case 'krea2':
                 return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal' };
             case 'minimax_h3':
-                return { ...base, diffusion_model_dtype: '', timestep_sample_method: 'uniform', shift: 8, image_shift: 1 };
+                return { ...base, diffusion_model_dtype: '', timestep_sample_method: 'uniform', shift: 8, image_shift: 1, merge_adapters: '' };
             default:
                 return base;
         }
@@ -701,6 +701,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="minimax_h3_video_vae_fp16.safetensors" />
                         <PathInput label={t('model.audio_vae')} helpText={t('help.audio_vae')} name="audio_vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="minimax_h3_audio_vae_fp32.safetensors" />
                         <PathInput label={`${t('model.text_encoder_path')} (Qwen3-VL)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen3vl_32b_minimax_h3_int8_convrot.safetensors" />
+                        <PathInput label={t('model.minimax_training_adapter')} helpText={t('help.minimax_training_adapter')} name="merge_adapters" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder={`${t('common.optional')} minimax_h3_training_adapter_v1.safetensors`} />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
                         <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'uniform'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
