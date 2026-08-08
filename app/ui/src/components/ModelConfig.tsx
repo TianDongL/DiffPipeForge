@@ -196,7 +196,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
             case 'krea2':
                 return { ...base, diffusion_model_dtype: 'float8', timestep_sample_method: 'logit_normal' };
             case 'minimax_h3':
-                return { ...base, diffusion_model_dtype: '', timestep_sample_method: 'uniform', shift: 8, image_shift: 1, merge_adapters: '' };
+                return { ...base, diffusion_model_dtype: '', timestep_sample_method: 'uniform', shift: 8, image_shift: 1, cfg: 4, merge_adapters: '' };
             default:
                 return base;
         }
@@ -215,7 +215,15 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                 }
             }
         }
-        onChange({ ...data, [e.target.name]: value });
+        const updates: Record<string, any> = { [e.target.name]: value };
+        if (modelType === 'minimax_h3') {
+            if (e.target.name === 'cfg' && value !== '' && Number(value) > 1) {
+                updates.merge_adapters = '';
+            } else if (e.target.name === 'merge_adapters' && typeof value === 'string' && value.trim() !== '') {
+                updates.cfg = '';
+            }
+        }
+        onChange({ ...data, ...updates });
     };
 
     const handleQwenVariantChange = (variant: 'qwen_image' | 'qwen_edit' | 'qwen_2509' | 'qwen_2511' | 'qwen_2512') => {
@@ -256,7 +264,11 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
             });
 
             if (!result.canceled && result.filePaths.length > 0) {
-                onChange({ ...data, [name]: result.filePaths[0] });
+                const updates: Record<string, any> = { [name]: result.filePaths[0] };
+                if (modelType === 'minimax_h3' && name === 'merge_adapters') {
+                    updates.cfg = '';
+                }
+                onChange({ ...data, ...updates });
             }
         } catch (e) {
             console.error("Failed to pick path:", e);
@@ -701,12 +713,16 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
                         <PathInput label={t('model.vae_path')} helpText={t('help.vae_path')} name="vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="minimax_h3_video_vae_fp16.safetensors" />
                         <PathInput label={t('model.audio_vae')} helpText={t('help.audio_vae')} name="audio_vae" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="minimax_h3_audio_vae_fp32.safetensors" />
                         <PathInput label={`${t('model.text_encoder_path')} (Qwen3-VL)`} helpText={t('help.text_encoder_path')} name="text_encoder_path" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder="qwen3vl_32b_minimax_h3_int8_convrot.safetensors" />
+                        <GlassInput label={t('model.minimax_cfg')} helpText={t('help.minimax_cfg')} name="cfg" type="number" min="1" step="0.1" value={formatNum(data.cfg ?? '')} onChange={handleChange} placeholder="4" />
                         <PathInput label={t('model.minimax_training_adapter')} helpText={t('help.minimax_training_adapter')} name="merge_adapters" data={data} handleChange={handleChange} handlePickPath={handlePickPath} openTitle={t('project.open')} placeholder={`${t('common.optional')} minimax_h3_training_adapter_v1.safetensors`} />
                         <GlassSelect label={t('model_load.dtype')} helpText={t('help.dtype')} name="dtype" value={data.dtype || 'bfloat16'} onChange={handleChange} options={DTYPE_OPTIONS} />
                         <GlassSelect label={t('model_load.diffusion_model_dtype')} helpText={t('help.diffusion_model_dtype')} name="diffusion_model_dtype" value={data.diffusion_model_dtype ?? ''} onChange={handleChange} options={optionalDiffusionDtypeOptions} />
                         <GlassSelect label={t('model_load.timestep_sample_method')} helpText={t('help.timestep_sample_method')} name="timestep_sample_method" value={data.timestep_sample_method || 'uniform'} onChange={handleChange} options={TIMESTEP_SAMPLE_OPTIONS} />
                         <GlassInput label={t('model.shift')} helpText={t('help.minimax_shift')} name="shift" type="number" min="0.000001" value={formatNum(data.shift ?? 8)} onChange={handleChange} />
                         <GlassInput label={t('model.image_shift')} helpText={t('help.minimax_image_shift')} name="image_shift" type="number" min="0.000001" value={formatNum(data.image_shift ?? 1)} onChange={handleChange} />
+                        <div className="col-span-2 rounded-lg border border-blue-400/20 bg-blue-400/10 p-3 text-sm text-blue-700 dark:text-blue-200">
+                            {t('help.minimax_distillation')}
+                        </div>
                         <div className="col-span-2 rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-200">
                             {t('help.minimax_audio')}
                         </div>

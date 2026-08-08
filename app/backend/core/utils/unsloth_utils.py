@@ -14,11 +14,12 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# I (tdrussell) made a few modifications.
+# I (tdrussell) made some modifications.
 
 import torch
-from deepspeed.runtime.activation_checkpointing.checkpointing import detach_variable
 
+# Only offload Tensors with at least this many elements.
+OFFLOAD_THRESHOLD = 5_000_000  # 10 MB for half-precision
 
 class Unsloth_Offloaded_Gradient_Checkpointer(torch.autograd.Function):
     """
@@ -27,43 +28,50 @@ class Unsloth_Offloaded_Gradient_Checkpointer(torch.autograd.Function):
     Tiny hit to performance, since we mask the movement via non blocking calls.
     """
 
+    # Skips saving for backward any tensors with no_backward set to True.
     @staticmethod
     @torch.amp.custom_fwd(device_type='cuda')
-    def forward(ctx, forward_function, hidden_states, *args):
-        saved_hidden_states = hidden_states.to('cpu', non_blocking=True)
+    def forward(ctx, forward_function, *args):
+        saved_args = []
+        saved_indices = []
+        for i, x in enumerate(args):
+            if getattr(x, 'no_backward', False):
+                continue
+            saved_args.append(x.to('cpu', non_blocking=True) if x.numel() >= OFFLOAD_THRESHOLD else x)
+            saved_indices.append(i)
+
         with torch.no_grad():
-            output = forward_function(hidden_states, *args)
-        ctx.save_for_backward(saved_hidden_states)
+            output = forward_function(*args)
+        ctx.save_for_backward(*saved_args)
         ctx.forward_function = forward_function
-        ctx.args = args
+        ctx.saved_indices = saved_indices
+        ctx.num_args = len(args)
         return output
 
-    pass
-
+    # For tensors not saved for backward, they are passed to function as None. The function should still return the
+    # same number of values in this case, but some of them can be None.
     @staticmethod
     @torch.amp.custom_bwd(device_type='cuda')
     def backward(ctx, *grads):
-        (hidden_states,) = ctx.saved_tensors
-        hidden_states = hidden_states.to('cuda', non_blocking=True).detach()
-        hidden_states.requires_grad_(True)
-        args = detach_variable(ctx.args)
-        inputs = (hidden_states,) + args
+        args = [None]*ctx.num_args
+        saved_indices = ctx.saved_indices
+        for i, x in enumerate(ctx.saved_tensors):
+            x = x.to('cuda', non_blocking=True).detach()
+            if torch.is_floating_point(x):
+                x.requires_grad_(True)
+            args[saved_indices[i]] = x
+
         with torch.enable_grad():
-            outputs = ctx.forward_function(*inputs)
+            outputs = ctx.forward_function(*args)
 
         output_tensors = []
         grad_tensors = []
         for out, grad in zip(outputs, grads):
-            if out.requires_grad:
+            if out is not None and out.requires_grad:
                 output_tensors.append(out)
                 grad_tensors.append(grad)
         torch.autograd.backward(output_tensors, grad_tensors)
-        return (None,) + tuple(input.grad for input in inputs)
-
-    pass
-
-
-pass
+        return (None,) + tuple(None if arg is None else arg.grad for arg in args)
 
 
 @torch._disable_dynamo

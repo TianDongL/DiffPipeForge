@@ -51,7 +51,7 @@
   - **Multi-language** support (English & Chinese).
 
 > [!IMPORTANT]
-> After upgrading from the previous upstream baseline, regenerate latent caches for **Z-Image, Flux 2, and Ernie-Image**. Latent scaling now happens during caching, so old caches are incompatible. This update also adds MiniMax H3 audio training and direct LoRA training on supported quantized ComfyUI checkpoints.
+> After upgrading from an older build, regenerate latent caches for **Z-Image, Flux 2, and Ernie-Image**. Latent scaling now happens during caching, so old caches are incompatible. MiniMax H3 now supports audio training and CFG-augmented training that preserves guidance distillation; use CFG augmentation or a training adapter, never both. Supported quantized ComfyUI checkpoints can be trained directly with LoRA.
 
 ## 🛠️ Project Structure
 

@@ -765,22 +765,25 @@ dtype = 'bfloat16'
 timestep_sample_method = 'uniform'  # or 'logit_normal'
 shift = 8  # The optimal value is not yet known; 1 is much too low for video.
 image_shift = 1  # 1, or slightly above 1, appears suitable for images.
-# Optional third-party training/de-distillation adapter, merged before training the new LoRA:
+# Recommended CFG-augmented training to preserve distillation. Use this or a training adapter, not both.
+cfg = 4
+# Optional alternative: third-party training/de-distillation adapter, merged before training the new LoRA:
 # merge_adapters = ['C:/path/to/minimax_h3_training_adapter_v1.safetensors']
 ```
 
-Use ComfyUI-format files for every component. Saved models and LoRAs are also in ComfyUI format. LoRAs can be trained directly on quantized weights; the upstream author recommends the int8 convrot diffusion model and text encoder because they are faster, use less VRAM, and preserve better quality. When training directly on quantized weights, leave `diffusion_model_dtype` unset. A quantized base model cannot be full fine-tuned; use a non-quantized model for full fine-tuning.
+Use ComfyUI-format files for every component. Saved models and LoRAs are also in ComfyUI format. LoRAs can be trained directly on quantized weights; the int8 convrot diffusion model and text encoder are recommended because they are faster, use less VRAM, and preserve better quality. When training directly on quantized weights, leave `diffusion_model_dtype` unset. A quantized base model cannot be full fine-tuned; use a non-quantized model for full fine-tuning.
 
 Current limitations and behavior:
 
 - Only T2I and T2V training are supported. If a source video contains audio, its audio is trained automatically (effectively T2VA). Reference-image, edit, I2V, and first/last-frame conditioning training are not supported.
-- Batch sizes above `1` are supported. Mixed image/video training can use a separate `image_micro_batch_size_per_gpu`; the upstream example uses `8` images for roughly the VRAM cost of one five-second video.
+- Batch sizes above `1` are supported. Mixed image/video training can use a separate `image_micro_batch_size_per_gpu`; the reference configuration uses `8` images for roughly the VRAM cost of one five-second video.
 - MiniMax H3 uses fixed 24 fps video preprocessing and 32 kHz audio. Videos without an audio track and image-only datasets are supported.
 - AdaLN weights are excluded from LoRA targets, so a LoRA remains compatible with both the full and pruned H3 checkpoints.
 - `blocks_to_swap = 48` is the maximum documented value. `activation_checkpointing = 'unsloth'` is also recommended for reducing VRAM use.
 - The ideal timestep distribution and shift are not yet known. `timestep_sample_method = 'uniform'` with `shift = 12` matches the default inference schedule; a lower value such as 8 may improve fine detail at the cost of large-scale structure and motion.
-- Training gradually undistills the model, so inference may require CFG. Image training is valid, but training exclusively on images can weaken the model's video and motion understanding.
-- The optional third-party [Ostris training adapter](https://huggingface.co/ostris/minimax_h3_training_adapter) can be selected in the UI. It is merged into the base model before training and is separate from the character or style LoRA produced by the run.
-- The trainer now attempts to release the VAE and text encoder after caching. Upstream notes that some RAM may still remain allocated; if that causes an out-of-memory error, finish caching first, restart the application, and then begin training from the existing cache.
+- Standard training gradually undistills the model, so inference may require CFG. The recommended `cfg = 4` mode uses the model's own unconditional prediction to reconstruct the raw velocity and preserve built-in guidance distillation, allowing longer training without undistillation. It adds one no-grad unconditional forward pass and is therefore slightly slower; with `activation_checkpointing = 'unsloth'`, it uses essentially no additional memory. It requires `pipeline_stages = 1`.
+- The optional third-party [Ostris training adapter](https://huggingface.co/ostris/minimax_h3_training_adapter) is the alternative preservation method. Select either CFG-augmented training or this adapter in the UI, never both. The adapter is merged into the base model before training and is separate from the character or style LoRA produced by the run.
+- Image training is valid, but training exclusively on images can weaken the model's video and motion understanding.
+- The trainer now attempts to release the VAE and text encoder after caching. Some RAM may still remain allocated; if that causes an out-of-memory error, finish caching first, restart the application, and then begin training from the existing cache.
 
 Read the complete bilingual [MiniMax H3 training notes](minimax_h3_notes.md) before training, and see the [MiniMax H3 example configuration](examples/minimax_h3_example.toml).

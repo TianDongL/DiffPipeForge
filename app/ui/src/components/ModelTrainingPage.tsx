@@ -439,6 +439,26 @@ export function ModelTrainingPage({
             if (isNaN(cbs) || cbs <= 0) return { valid: false, message: t('validation.invalid_integer') };
         }
 
+        if (modelData.model_type === 'minimax_h3') {
+            const cfgRaw = modelData.cfg;
+            const hasCfgValue = cfgRaw !== undefined && cfgRaw !== null && String(cfgRaw).trim() !== '';
+            const cfg = Number(cfgRaw);
+            if (hasCfgValue && (!Number.isFinite(cfg) || cfg < 1)) {
+                return { valid: false, message: t('validation.minimax_cfg') };
+            }
+
+            const mergeAdapters = modelData.merge_adapters;
+            const hasTrainingAdapter = Array.isArray(mergeAdapters)
+                ? mergeAdapters.some((adapter) => typeof adapter === 'string' && adapter.trim() !== '')
+                : typeof mergeAdapters === 'string' && mergeAdapters.trim() !== '';
+            if (hasCfgValue && cfg > 1 && hasTrainingAdapter) {
+                return { valid: false, message: t('validation.minimax_cfg_adapter_conflict') };
+            }
+            if (hasCfgValue && cfg > 1 && Number(trainingData.pipeline_stages ?? 1) !== 1) {
+                return { valid: false, message: t('validation.minimax_cfg_pipeline_stages') };
+            }
+        }
+
         // 3. Warmup steps
         if (trainingData.warmup_steps !== undefined) {
             const warmup = Number(trainingData.warmup_steps);
@@ -749,6 +769,9 @@ export function ModelTrainingPage({
                         lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'uniform'}'`);
                         lines.push(`shift = ${formatValue(m.shift ?? 8)}`);
                         lines.push(`image_shift = ${formatValue(m.image_shift ?? 1)}`);
+                        if (m.cfg !== undefined && m.cfg !== null && String(m.cfg).trim() !== '') {
+                            lines.push(`cfg = ${formatValue(m.cfg)}`);
+                        }
                         if (m.merge_adapters) {
                             const adapters = Array.isArray(m.merge_adapters) ? m.merge_adapters : [m.merge_adapters];
                             const adapterPaths = adapters.filter((adapter: unknown): adapter is string => typeof adapter === 'string' && adapter.trim() !== '');

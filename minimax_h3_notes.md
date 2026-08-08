@@ -6,9 +6,13 @@
 
 ### Training behavior
 
-Any training gradually undistills MiniMax H3. Inference may therefore require CFG; the amount depends on the dataset size and training duration. Ostris has since released an experimental [MiniMax H3 training adapter](https://huggingface.co/ostris/minimax_h3_training_adapter) that can be supplied through `[model].merge_adapters` before training a separate character or style LoRA. This third-party training/de-distillation adapter is merged into the base model and is distinct from the new LoRA configured under `[adapter]`.
+Standard training gradually undistills MiniMax H3, so inference may require CFG. The recommended solution is [CFG-augmented training](https://github.com/tdrussell/diffusion-pipe/issues/533#issuecomment-5226917442): set `[model].cfg = 4` to use the model's own unconditional prediction to reconstruct the raw velocity while fitting the standard flow-matching target, effectively baking guidance back into the trained result. This preserves the model's built-in guidance distillation even during long training runs, requires `pipeline_stages = 1`, and cannot be combined with a training adapter.
 
-MiniMax H3 now supports batch sizes above `1`. Mixed image/video training can use `image_micro_batch_size_per_gpu` to give images a larger batch than videos; the upstream example uses `8` images for roughly the VRAM cost of one five-second video.
+CFG augmentation performs one additional no-grad unconditional forward pass, so it is slightly slower than standard training. With `activation_checkpointing = 'unsloth'`, the implementation avoids unnecessary recomputation and backward-pass tensor storage, so the extra pass uses essentially no additional memory.
+
+Alternatively, Ostris provides an experimental [MiniMax H3 training adapter](https://huggingface.co/ostris/minimax_h3_training_adapter). Supply it through `[model].merge_adapters` before training a separate character or style LoRA. This third-party training/de-distillation adapter is merged into the base model and is distinct from the new LoRA configured under `[adapter]`; its behavior has not been independently verified here.
+
+MiniMax H3 now supports batch sizes above `1`. Mixed image/video training can use `image_micro_batch_size_per_gpu` to give images a larger batch than videos; the reference configuration uses `8` images for roughly the VRAM cost of one five-second video.
 
 AdaLN weights are not trained by LoRA. This keeps the resulting LoRA compatible with both the full and pruned H3 checkpoints.
 
@@ -16,9 +20,9 @@ AdaLN weights are not trained by LoRA. This keeps the resulting LoRA compatible 
 
 The caching phase uses ComfyUI dynamic VRAM, so the text encoder may be larger than available VRAM. For example, the int8 convrot text encoder is about 26GB but can still compute embeddings on a 24GB GPU.
 
-After caching, the trainer now deletes the dataset manager and attempts to release the VAE and text encoder. Upstream reports that this only partially reduces RAM in some cases. If the remaining allocation causes an out-of-memory error, finish the cache-only phase, restart DiffPipe Forge, and then train using the existing cache. `--trust_cache` makes cache loading faster, but it must only be used when the underlying dataset files have not changed.
+After caching, the trainer now deletes the dataset manager and attempts to release the VAE and text encoder. This only partially reduces RAM in some cases. If the remaining allocation causes an out-of-memory error, finish the cache-only phase, restart DiffPipe Forge, and then train using the existing cache. `--trust_cache` makes cache loading faster, but it must only be used when the underlying dataset files have not changed.
 
-On native Windows, the upstream `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` example may not be supported by the bundled PyTorch build. The important part is separating caching and training into two runs; the allocator flag is optional.
+On native Windows, the `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` setting shown in some Linux examples may not be supported by the bundled PyTorch build. The important part is separating caching and training into two runs; the allocator flag is optional.
 
 ### Quantization and VRAM
 
@@ -32,7 +36,7 @@ Audio is trained automatically when a source video contains an audio track. Vide
 
 Image training is valid. The video VAE encoder can map one image frame to one valid latent frame even though its decoder does not reconstruct that single-frame latent especially well. The latent is still suitable for training. However, training only on images gradually weakens video and motion understanding, so a mixed image/video dataset is preferable.
 
-The optimal timestep distribution and shift are not yet known. `timestep_sample_method = 'uniform'` with `shift = 12` matches the default inference schedule. A lower shift, such as 8, may improve fine detail while reducing large-scale structure and motion learning. `image_shift` overrides this value for single-frame image examples; upstream suggests `1` or slightly above `1` for images.
+The optimal timestep distribution and shift are not yet known. `timestep_sample_method = 'uniform'` with `shift = 12` matches the default inference schedule. A lower shift, such as 8, may improve fine detail while reducing large-scale structure and motion learning. `image_shift` overrides this value for single-frame image examples; use `1` or slightly above `1` as a starting point for images.
 
 Only T2I and T2V training are implemented. Reference-image, edit, I2V, and first/last-frame conditioning training are not supported. The model retains its existing first/last-frame inference capability when a pure T2V LoRA is applied, and a T2V LoRA is more broadly compatible.
 
@@ -40,9 +44,13 @@ Only T2I and T2V training are implemented. Reference-image, edit, I2V, and first
 
 ### 训练行为
 
-任何训练都会让 MiniMax H3 逐渐解除蒸馏，因此推理时可能需要使用 CFG；所需强度取决于数据集规模和训练时长。Ostris 随后发布了实验性的 [MiniMax H3 训练适配器](https://huggingface.co/ostris/minimax_h3_training_adapter)，可以通过 `[model].merge_adapters` 加载，再训练独立的角色或风格 LoRA。这个第三方训练/去蒸馏适配器会合并到基础模型中，与 `[adapter]` 下配置并最终输出的新 LoRA 不是同一个文件。
+常规训练会让 MiniMax H3 逐渐解除蒸馏，因此推理时可能需要使用 CFG。推荐使用 [CFG 增强训练](https://github.com/tdrussell/diffusion-pipe/issues/533#issuecomment-5226917442)：设置 `[model].cfg = 4`，在拟合标准流匹配目标时利用模型自身的无条件预测还原 raw velocity，相当于把引导效果重新烘焙进训练结果。即使进行较长时间训练，该方式也能保留模型内置的引导蒸馏，但要求 `pipeline_stages = 1`，并且不能与训练适配器同时启用。
 
-MiniMax H3 现已支持大于 `1` 的 batch size。混合图片/视频训练可以通过 `image_micro_batch_size_per_gpu` 为图片设置更大的批次；上游示例使用 `8` 张图片，其显存开销约等于一个五秒视频。
+CFG 增强会额外执行一次无梯度的无条件前向，因此训练速度比常规训练略慢。配合 `activation_checkpointing = 'unsloth'` 时，实现会避免不必要的重算和反向传播张量保存，所以额外前向基本不增加内存占用。
+
+也可以改用 Ostris 发布的实验性 [MiniMax H3 训练适配器](https://huggingface.co/ostris/minimax_h3_training_adapter)，通过 `[model].merge_adapters` 加载，再训练独立的角色或风格 LoRA。这个第三方训练/去蒸馏适配器会合并到基础模型中，与 `[adapter]` 下配置并最终输出的新 LoRA 不是同一个文件；其实际效果尚未在本项目中独立验证。
+
+MiniMax H3 现已支持大于 `1` 的 batch size。混合图片/视频训练可以通过 `image_micro_batch_size_per_gpu` 为图片设置更大的批次；参考配置使用 `8` 张图片，其显存开销约等于一个五秒视频。
 
 LoRA 不训练 AdaLN 权重，因此输出的 LoRA 可以同时兼容完整和剪枝版 H3 检查点。
 
@@ -50,9 +58,9 @@ LoRA 不训练 AdaLN 权重，因此输出的 LoRA 可以同时兼容完整和�
 
 缓存阶段使用 ComfyUI 动态显存管理，因此文本编码器可以大于显卡可用显存。例如，int8 convrot 文本编码器约为 26GB，但仍可在 24GB 显卡上计算文本嵌入。
 
-缓存完成后，训练器现在会删除数据集管理器，并尝试释放 VAE 和文本编码器。上游反馈在某些情况下只能释放部分系统内存。若剩余占用仍导致内存不足，请先仅完成缓存，重启 DiffPipe Forge，再复用已有缓存开始训练。`--trust_cache` 可以加快缓存加载，但只能在底层数据集文件未发生变化时使用。
+缓存完成后，训练器现在会删除数据集管理器，并尝试释放 VAE 和文本编码器；在某些情况下只能释放部分系统内存。若剩余占用仍导致内存不足，请先仅完成缓存，重启 DiffPipe Forge，再复用已有缓存开始训练。`--trust_cache` 可以加快缓存加载，但只能在底层数据集文件未发生变化时使用。
 
-在原生 Windows 上，上游示例中的 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 可能不受内置 PyTorch 支持。关键是把缓存和训练拆分为两次运行；该内存分配器参数不是必需项。
+在原生 Windows 上，部分 Linux 示例中的 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 可能不受内置 PyTorch 支持。关键是把缓存和训练拆分为两次运行；该内存分配器参数不是必需项。
 
 ### 量化与显存
 
@@ -66,6 +74,6 @@ LoRA 可以直接在 ComfyUI 量化权重上训练，推荐使用 int8 convrot �
 
 图片训练是有效的。视频 VAE 编码器能够把单张图片映射为一个有效 latent 帧，虽然解码器对这一单帧 latent 的重建效果并不理想，但该 latent 仍然适合训练。不过，只使用图片训练会逐渐削弱视频和运动理解能力，因此更推荐混合图片/视频数据集。
 
-目前尚未确定最佳时间步分布和 shift。`timestep_sample_method = 'uniform'` 配合 `shift = 12` 与默认推理调度一致。把 shift 降至 8 等更低值可能改善细节学习，但会削弱大尺度结构和运动学习。`image_shift` 会仅对单帧图片覆盖该值；上游建议图片使用 `1` 或略高于 `1`。
+目前尚未确定最佳时间步分布和 shift。`timestep_sample_method = 'uniform'` 配合 `shift = 12` 与默认推理调度一致。把 shift 降至 8 等更低值可能改善细节学习，但会削弱大尺度结构和运动学习。`image_shift` 会仅对单帧图片覆盖该值；图片可从 `1` 或略高于 `1` 开始尝试。
 
 当前仅实现文生图和文生视频训练，不支持参考图、编辑、图生视频或首尾帧条件训练。应用纯 T2V LoRA 后，模型原有的首尾帧推理能力仍会保留，而且 T2V LoRA 的适用模式更加广泛。

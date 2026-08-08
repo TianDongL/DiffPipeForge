@@ -19,6 +19,9 @@ type MiniMaxValidationKey =
     | 'validation.minimax_required_paths'
     | 'validation.minimax_blocks_to_swap'
     | 'validation.minimax_shift'
+    | 'validation.minimax_cfg'
+    | 'validation.minimax_cfg_adapter_conflict'
+    | 'validation.minimax_cfg_pipeline_stages'
     | 'validation.invalid_video_clip_mode';
 
 type TomlRecord = Record<string, unknown>;
@@ -65,6 +68,24 @@ const validateMiniMaxH3Config = (configValue: unknown): MiniMaxValidationKey | n
     const shift = Number(model.shift);
     if (!Number.isFinite(shift) || shift <= 0) {
         return 'validation.minimax_shift';
+    }
+
+    const cfgRaw = model.cfg;
+    const hasCfgValue = cfgRaw !== undefined && cfgRaw !== null && String(cfgRaw).trim() !== '';
+    const cfg = Number(cfgRaw);
+    if (hasCfgValue && (!Number.isFinite(cfg) || cfg < 1)) {
+        return 'validation.minimax_cfg';
+    }
+
+    const mergeAdapters = model.merge_adapters;
+    const hasTrainingAdapter = Array.isArray(mergeAdapters)
+        ? mergeAdapters.some((adapter) => typeof adapter === 'string' && adapter.trim() !== '')
+        : typeof mergeAdapters === 'string' && mergeAdapters.trim() !== '';
+    if (hasCfgValue && cfg > 1 && hasTrainingAdapter) {
+        return 'validation.minimax_cfg_adapter_conflict';
+    }
+    if (hasCfgValue && cfg > 1 && Number(config.pipeline_stages ?? 1) !== 1) {
+        return 'validation.minimax_cfg_pipeline_stages';
     }
 
     const videoClipMode = config.video_clip_mode ?? 'single_beginning';

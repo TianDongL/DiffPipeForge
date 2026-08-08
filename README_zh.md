@@ -51,7 +51,7 @@
   - **多语言** 支持（中英文切换）。
 
 > [!IMPORTANT]
-> 从此前的上游基线升级后，使用 **Z-Image、Flux 2、Ernie-Image** 时必须重新生成 latent 缓存。latent 缩放现已移到缓存阶段，旧缓存不再兼容。本次更新同时加入 MiniMax H3 音频训练，以及在受支持的 ComfyUI 量化检查点上直接训练 LoRA 的能力。
+> 从旧版本升级后，使用 **Z-Image、Flux 2、Ernie-Image** 时必须重新生成 latent 缓存。latent 缩放现已移到缓存阶段，旧缓存不再兼容。MiniMax H3 现已支持音频训练和保留引导蒸馏的 CFG 增强训练；CFG 增强与训练适配器只能二选一。受支持的 ComfyUI 量化检查点可以直接训练 LoRA。
 
 ## 🛠️ 项目结构
 
