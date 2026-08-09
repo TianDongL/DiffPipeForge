@@ -1,11 +1,13 @@
-import { ipc } from '@/lib/ipc';
-import React, { useState, useEffect } from 'react';
+import { ipc, isElectron } from '@/lib/ipc';
+import React, { useCallback, useState, useEffect } from 'react';
 import { GlassCard } from './ui/GlassCard';
 import { GlassInput } from './ui/GlassInput';
 import { GlassSelect } from './ui/GlassSelect';
 import { useTranslation } from 'react-i18next';
 import { FolderOpen } from 'lucide-react';
 import { HelpIcon } from './ui/HelpIcon';
+import { WebModelDownloadPanel } from './WebModelDownloadPanel';
+import { WebPathPicker } from './ui/WebPathPicker';
 
 export interface ModelConfigProps {
     data: any;
@@ -76,6 +78,11 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
     const { t } = useTranslation();
     const [modelType, setModelType] = useState('sdxl');
     const [qwenVariant, setQwenVariant] = useState<'qwen_image' | 'qwen_edit' | 'qwen_2509' | 'qwen_2511' | 'qwen_2512'>('qwen_image');
+    const [webPicker, setWebPicker] = useState<{ open: boolean; name: string; isFolder: boolean }>({
+        open: false,
+        name: '',
+        isFolder: false,
+    });
     const optionalDiffusionDtypeOptions = [
         { label: t('model_load.native_checkpoint'), value: '' },
         ...TRANSFORMER_DTYPE_OPTIONS
@@ -256,6 +263,10 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
     };
 
     const handlePickPath = async (name: string, isFolder: boolean = false) => {
+        if (!isElectron) {
+            setWebPicker({ open: true, name, isFolder });
+            return;
+        }
         try {
             // @ts-ignore
             const result = await ipc.invoke('dialog:openFile', {
@@ -274,6 +285,10 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
             console.error("Failed to pick path:", e);
         }
     };
+
+    const applyWebModelPaths = useCallback((paths: Record<string, string>) => {
+        onChange({ ...data, ...paths });
+    }, [data, onChange]);
 
     const renderFields = () => {
         switch (modelType) {
@@ -735,6 +750,7 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
     };
 
     return (
+        <>
         <GlassCard className="p-6">
             <div className="mb-6 flex justify-between items-start">
                 <div>
@@ -754,9 +770,28 @@ export function ModelConfig({ data, onChange }: ModelConfigProps) {
 
             <div className="space-y-6">
                 <div className="grid gap-6 md:grid-cols-2">
+                    {!isElectron && <WebModelDownloadPanel modelType={modelType} onPathsReady={applyWebModelPaths} />}
                     {renderFields()}
                 </div>
             </div>
         </GlassCard>
+        {!isElectron && (
+            <WebPathPicker
+                open={webPicker.open}
+                title={t('web_resources.select_model_path')}
+                mode={webPicker.isFolder ? 'directory' : 'file'}
+                modelOnly={!webPicker.isFolder}
+                initialPath={String(data[webPicker.name] || '')}
+                onClose={() => setWebPicker((previous) => ({ ...previous, open: false }))}
+                onSelect={(path) => {
+                    const updates: Record<string, any> = { [webPicker.name]: path };
+                    if (modelType === 'minimax_h3' && webPicker.name === 'merge_adapters') {
+                        updates.cfg = '';
+                    }
+                    onChange({ ...data, ...updates });
+                }}
+            />
+        )}
+        </>
     );
 }

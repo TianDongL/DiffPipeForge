@@ -1,10 +1,14 @@
 import React from 'react';
+import { isElectron } from '@/lib/ipc';
+import { webFiles, WebRootsResponse } from '@/lib/webFiles';
 import { GlassCard } from './ui/GlassCard';
 import { GlassInput } from './ui/GlassInput';
 import { GlassSelect } from './ui/GlassSelect';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Database, FolderOpen, Loader2 } from 'lucide-react';
 import { HelpIcon } from './ui/HelpIcon';
+import { GlassButton } from './ui/GlassButton';
+import { WebPathPicker } from './ui/WebPathPicker';
 
 export interface TrainingConfigProps {
     data: any;
@@ -15,12 +19,50 @@ export interface TrainingConfigProps {
 
 export function TrainingConfig({ data, modelType, onChange, validationEnabled = true }: TrainingConfigProps) {
     const { t } = useTranslation();
+    const [roots, setRoots] = React.useState<WebRootsResponse | null>(null);
+    const [pickerOpen, setPickerOpen] = React.useState(false);
+    const [preparingOutput, setPreparingOutput] = React.useState(false);
+    const [outputError, setOutputError] = React.useState('');
+
+    React.useEffect(() => {
+        if (isElectron) return;
+        void webFiles.roots().then(setRoots).catch((reason) => {
+            setOutputError(reason instanceof Error ? reason.message : String(reason));
+        });
+    }, []);
 
     const isVideoModel = ['hunyuan_video', 'ltx_video', 'ltx2', 'wan21', 'wan22', 'hunyuan_video_15', 'cosmos', 'minimax_h3'].includes(modelType || '');
     const isMiniMaxH3 = modelType === 'minimax_h3';
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         onChange({ ...data, [e.target.name]: e.target.value });
+    };
+
+    const useRecommendedOutput = async () => {
+        if (!roots?.recommendedOutputBase.writable) return;
+        setPreparingOutput(true);
+        setOutputError('');
+        try {
+            const result = await webFiles.ensureDirectory(roots.recommendedOutputBase.path);
+            onChange({ ...data, output_base_dir: result.path });
+        } catch (reason) {
+            setOutputError(reason instanceof Error ? reason.message : String(reason));
+        } finally {
+            setPreparingOutput(false);
+        }
+    };
+
+    const useSelectedOutput = async (path: string) => {
+        setPreparingOutput(true);
+        setOutputError('');
+        try {
+            const result = await webFiles.ensureDirectory(path);
+            onChange({ ...data, output_base_dir: result.path });
+        } catch (reason) {
+            setOutputError(reason instanceof Error ? reason.message : String(reason));
+        } finally {
+            setPreparingOutput(false);
+        }
     };
 
     return (
@@ -32,6 +74,37 @@ export function TrainingConfig({ data, modelType, onChange, validationEnabled = 
                 </div>
 
                 <div className="grid gap-6 md:grid-cols-3">
+                    {!isElectron && (
+                        <div className="md:col-span-3 rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <div className="font-semibold flex items-center gap-2"><Database className="w-4 h-4" />{t('web_resources.output_base')}</div>
+                                    <div className="text-xs text-muted-foreground mt-1">{t('web_resources.output_base_hint')}</div>
+                                </div>
+                                <div className="flex gap-2">
+                                    {roots?.recommendedOutputBase.writable && (
+                                        <GlassButton type="button" size="sm" variant="outline" onClick={() => void useRecommendedOutput()} disabled={preparingOutput}>
+                                            {preparingOutput ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
+                                            {t('web_resources.use_recommended')}
+                                        </GlassButton>
+                                    )}
+                                    <GlassButton type="button" size="sm" variant="outline" onClick={() => setPickerOpen(true)}>
+                                        <FolderOpen className="w-4 h-4 mr-2" />{t('common.browse')}
+                                    </GlassButton>
+                                </div>
+                            </div>
+                            <div className="rounded-lg bg-black/15 border border-white/10 px-3 py-2 font-mono text-sm break-all">
+                                {data.output_base_dir || t('web_resources.output_project_default')}
+                            </div>
+                            {roots && (
+                                <div className="text-xs text-muted-foreground">
+                                    {t('web_resources.recommended')}: {roots.recommendedOutputBase.path} · {t(`web_resources.storage_${roots.recommendedOutputBase.storageKind}`)}
+                                    {!roots.recommendedOutputBase.exists && ` · ${t('web_resources.created_on_confirm')}`}
+                                </div>
+                            )}
+                            {outputError && <div className="text-sm text-red-400">{outputError}</div>}
+                        </div>
+                    )}
                     <GlassInput label={t('training.output_name')} helpText={t('help.output_name')} name="output_folder_name" value={data.output_folder_name ?? 'mylora'} onChange={handleChange} />
                     <GlassInput label={t('training.epochs')} helpText={t('help.epochs')} name="epochs" type="number" value={data.epochs ?? 50} onChange={handleChange} />
                     <GlassInput label={t('training.batch_size')} helpText={t('help.micro_batch_size_per_gpu')} name="micro_batch_size_per_gpu" type="number" value={data.micro_batch_size_per_gpu ?? 1} onChange={handleChange} />
@@ -145,6 +218,18 @@ export function TrainingConfig({ data, modelType, onChange, validationEnabled = 
                     </div>
                 </div>
             </GlassCard>
+            {!isElectron && (
+                <WebPathPicker
+                    open={pickerOpen}
+                    title={t('web_resources.select_output_base')}
+                    mode="directory"
+                    allowCreate
+                    writableOnly
+                    initialPath={data.output_base_dir || roots?.recommendedOutputBase.path}
+                    onClose={() => setPickerOpen(false)}
+                    onSelect={(path) => void useSelectedOutput(path)}
+                />
+            )}
         </div>
     );
 }

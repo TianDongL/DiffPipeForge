@@ -1,4 +1,4 @@
-import { ipc } from '@/lib/ipc';
+import { ipc, isElectron } from '@/lib/ipc';
 import { useState, useEffect } from "react";
 import { GlassButton } from "./ui/GlassButton";
 import { Save, RotateCcw } from "lucide-react";
@@ -11,6 +11,7 @@ import { AdvancedTrainingConfig } from "./AdvancedTrainingConfig";
 import { OptimizerConfig } from "./OptimizerConfig";
 import { AdapterConfig } from "./AdapterConfig";
 import { MonitoringConfig } from "./MonitoringConfig";
+import { tomlPath, tomlString } from "@/lib/toml";
 
 interface ModelTrainingPageProps {
     importedConfig?: any;
@@ -29,6 +30,7 @@ const DEFAULT_MODEL_DATA = {
 };
 const DEFAULT_TRAINING_DATA = {
     output_folder_name: 'mylora',
+    output_base_dir: '',
     epochs: 50,
     micro_batch_size_per_gpu: 1,
     gradient_accumulation_steps: 3,
@@ -233,11 +235,15 @@ export function ModelTrainingPage({
             trainKeys.forEach(key => {
                 if (importedConfig[key] !== undefined) {
                     if (key === 'output_dir') {
-                        const fullPath = String(importedConfig[key]).replace(/\\/g, '/');
+                        const fullPath = String(importedConfig[key]).replace(/\\/g, '/').replace(/\/+$/, '');
                         const segments = fullPath.split('/').filter(Boolean);
                         let basename = segments.pop() || 'mylora';
 
                         tData.output_folder_name = basename;
+                        const separator = fullPath.lastIndexOf('/');
+                        if (separator > 0) {
+                            tData.output_base_dir = fullPath.slice(0, separator);
+                        }
                     } else if (key === 'activation_checkpointing') {
                         tData[key] = String(importedConfig[key]);
                     } else {
@@ -343,10 +349,18 @@ export function ModelTrainingPage({
         const datasetPath = savedPaths.datasetPath || `${dateDir}/dataset.toml`;
         const evalDatasetPath = savedPaths.evalDatasetPath || `${dateDir}/evaldataset.toml`;
 
-        const finalOutputDir = `${dateDir}/${trainingData.output_folder_name || 'mylora'}`;
+        const configuredOutputBase = String(trainingData.output_base_dir || '')
+            .trim()
+            .replace(/\\/g, '/')
+            .replace(/\/+$/, '');
+        const finalOutputDir = configuredOutputBase
+            ? `${configuredOutputBase}/${trainingData.output_folder_name || 'mylora'}`
+            : `${dateDir}/${trainingData.output_folder_name || 'mylora'}`;
+        const trainingConfigData = { ...trainingData };
+        delete trainingConfigData.output_base_dir;
 
         const fullConfig = {
-            ...trainingData,
+            ...trainingConfigData,
             ...advancedData,
             model: modelData,
             optimizer: optimizerData,
@@ -416,6 +430,27 @@ export function ModelTrainingPage({
 
     const validate = (): { valid: boolean; message?: string } => {
         // 移除输出目录名的非空强校验，允许用户保存中间状态
+        if (!isElectron) {
+            const rawOutputName = String(trainingData.output_folder_name || 'mylora');
+            const outputName = rawOutputName.trim();
+            const reservedStem = outputName.split('.', 1)[0].toLocaleLowerCase();
+            const windowsReserved = new Set([
+                'con', 'prn', 'aux', 'nul',
+                ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+                ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`),
+            ]);
+            if (
+                !outputName
+                || rawOutputName !== outputName
+                || outputName === '.'
+                || outputName === '..'
+                || /[:\\/\u0000-\u001f]/.test(outputName)
+                || outputName.endsWith('.')
+                || windowsReserved.has(reservedStem)
+            ) {
+                return { valid: false, message: t('validation.invalid_output_name') };
+            }
+        }
 
         // 2. Training params (epochs, batch size, grad accumulation)
         if (trainingData.epochs !== undefined) {
@@ -503,7 +538,7 @@ export function ModelTrainingPage({
                             return normalized.toString();
                         }
                     }
-                    return `'${v}'`;
+                    return tomlString(v);
                 }
 
                 if (typeof v === 'number') {
@@ -526,7 +561,7 @@ export function ModelTrainingPage({
                     const entries = Object.entries(v).map(([key, val]) => `${key} = ${formatValue(val)}`).join(', ');
                     return `{ ${entries} }`;
                 }
-                return `'${v}'`;
+                return tomlString(v);
             };
 
             const lines: string[] = [];
@@ -585,15 +620,15 @@ export function ModelTrainingPage({
                     case 'lumina2': backendType = 'lumina_2'; break;
                 }
 
-                lines.push(`type = '${backendType}'`);
+                lines.push(`type = ${tomlString(backendType)}`);
 
                 // Common fields across many models
-                if (m.dtype) lines.push(`dtype = '${m.dtype}'`);
+                if (m.dtype) lines.push(`dtype = ${tomlString(m.dtype)}`);
 
                 // Model-specific path and parameter logic
                 switch (m.model_type) {
                     case 'sdxl':
-                        if (m.checkpoint_path) lines.push(`checkpoint_path = '${m.checkpoint_path.replace(/\\/g, '/')}'`);
+                        if (m.checkpoint_path) lines.push(`checkpoint_path = ${tomlPath(m.checkpoint_path)}`);
                         lines.push(`unet_lr = ${formatValue(m.unet_lr || 4e-5)}`);
                         lines.push(`text_encoder_1_lr = ${formatValue(m.text_encoder_1_lr || 2e-5)}`);
                         lines.push(`text_encoder_2_lr = ${formatValue(m.text_encoder_2_lr || 2e-5)}`);
@@ -612,96 +647,96 @@ export function ModelTrainingPage({
                     case 'hidream':
                     case 'sd3':
                     case 'omnigen2':
-                        lines.push(`diffusers_path = '${(m.diffusers_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
+                        lines.push(`diffusers_path = ${tomlPath(m.diffusers_path || '')}`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
                         lines.push(`flux_shift = ${m.flux_shift !== undefined ? m.flux_shift : (m.model_type === 'flux' || m.model_type === 'flux_kontext' || m.model_type === 'chroma')}`);
                         if (m.model_type === 'flux') {
                             lines.push(`bypass_guidance_embedding = ${m.bypass_guidance_embedding === true}`);
                         }
-                        lines.push(`transformer_dtype = '${m.transformer_dtype || 'bfloat16'}'`);
+                        lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype || 'bfloat16')}`);
                         if (m.model_type === 'hidream') {
-                            lines.push(`llama3_path = '${(m.llama3_path || '').replace(/\\/g, '/')}'`);
+                            lines.push(`llama3_path = ${tomlPath(m.llama3_path || '')}`);
                             lines.push(`llama3_4bit = ${m.llama3_4bit !== false}`);
                             lines.push(`max_llama3_sequence_length = ${Number(m.max_llama3_sequence_length || 128)}`);
                         }
                         break;
 
                     case 'ltx_video':
-                        lines.push(`diffusers_path = '${(m.diffusers_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`single_file_path = '${(m.single_file_path || '').replace(/\\/g, '/')}'`);
-                        if (m.transformer_dtype) lines.push(`transformer_dtype = '${m.transformer_dtype}'`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        lines.push(`diffusers_path = ${tomlPath(m.diffusers_path || '')}`);
+                        lines.push(`single_file_path = ${tomlPath(m.single_file_path || '')}`);
+                        if (m.transformer_dtype) lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype)}`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'logit_normal')}`);
                         lines.push(`first_frame_conditioning_p = ${formatValue(m.first_frame_conditioning_p || 1.0)}`);
                         break;
 
                     case 'hunyuan-video':
                     case 'hunyuan_video':
-                        lines.push(`ckpt_path = '${(m.ckpt_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`llm_path = '${(m.llm_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`clip_path = '${(m.clip_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_dtype = '${m.transformer_dtype || 'bfloat16'}'`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        lines.push(`ckpt_path = ${tomlPath(m.ckpt_path || '')}`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`vae_path = ${tomlPath(m.vae_path || '')}`);
+                        lines.push(`llm_path = ${tomlPath(m.llm_path || '')}`);
+                        lines.push(`clip_path = ${tomlPath(m.clip_path || '')}`);
+                        lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype || 'bfloat16')}`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'logit_normal')}`);
                         break;
 
                     case 'wan21':
                     case 'wan22':
                         // Backend type 'wan' is handled at the top
-                        lines.push(`ckpt_path = '${(m.ckpt_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`llm_path = '${(m.llm_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_dtype = '${m.transformer_dtype || 'bfloat16'}'`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        lines.push(`ckpt_path = ${tomlPath(m.ckpt_path || '')}`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`llm_path = ${tomlPath(m.llm_path || '')}`);
+                        lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype || 'bfloat16')}`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'logit_normal')}`);
                         lines.push(`min_t = ${formatValue(m.min_t || 0.0)}`);
                         lines.push(`max_t = ${formatValue(m.max_t || 1.0)}`);
                         break;
 
                     case 'qwen_image':
                     case 'qwen2511':
-                        if (m.diffusers_path) lines.push(`diffusers_path = '${(m.diffusers_path).replace(/\\/g, '/')}'`);
-                        if (m.transformer_path) lines.push(`transformer_path = '${(m.transformer_path).replace(/\\/g, '/')}'`);
-                        if (m.text_encoder_path) lines.push(`text_encoder_path = '${(m.text_encoder_path).replace(/\\/g, '/')}'`);
-                        if (m.vae_path) lines.push(`vae_path = '${(m.vae_path).replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_dtype = '${m.transformer_dtype || 'float8'}'`);
-                        if (m.timestep_sample_method) lines.push(`timestep_sample_method = '${m.timestep_sample_method}'`);
+                        if (m.diffusers_path) lines.push(`diffusers_path = ${tomlPath(m.diffusers_path)}`);
+                        if (m.transformer_path) lines.push(`transformer_path = ${tomlPath(m.transformer_path)}`);
+                        if (m.text_encoder_path) lines.push(`text_encoder_path = ${tomlPath(m.text_encoder_path)}`);
+                        if (m.vae_path) lines.push(`vae_path = ${tomlPath(m.vae_path)}`);
+                        lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype || 'float8')}`);
+                        if (m.timestep_sample_method) lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method)}`);
                         break;
 
                     case 'hunyuan_image':
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`text_encoder_path = '${(m.text_encoder_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`byt5_path = '${(m.byt5_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_dtype = '${m.transformer_dtype || 'float8'}'`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`vae_path = ${tomlPath(m.vae_path || '')}`);
+                        lines.push(`text_encoder_path = ${tomlPath(m.text_encoder_path || '')}`);
+                        lines.push(`byt5_path = ${tomlPath(m.byt5_path || '')}`);
+                        lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype || 'float8')}`);
                         break;
 
                     case 'cosmos':
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`text_encoder_path = '${(m.text_encoder_path || '').replace(/\\/g, '/')}'`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`vae_path = ${tomlPath(m.vae_path || '')}`);
+                        lines.push(`text_encoder_path = ${tomlPath(m.text_encoder_path || '')}`);
                         break;
 
                     case 'cosmos_predict2':
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`t5_path = '${(m.t5_path || '').replace(/\\/g, '/')}'`);
-                        if (m.transformer_dtype) lines.push(`transformer_dtype = '${m.transformer_dtype}'`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`vae_path = ${tomlPath(m.vae_path || '')}`);
+                        lines.push(`t5_path = ${tomlPath(m.t5_path || '')}`);
+                        if (m.transformer_dtype) lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype)}`);
                         break;
 
                     case 'lumina2':
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`llm_path = '${(m.llm_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`llm_path = ${tomlPath(m.llm_path || '')}`);
+                        lines.push(`vae_path = ${tomlPath(m.vae_path || '')}`);
                         lines.push(`lumina_shift = ${m.lumina_shift !== false}`);
                         break;
 
                     case 'auraflow':
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`text_encoder_path = '${(m.text_encoder_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`transformer_dtype = '${m.transformer_dtype || 'float8'}'`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`text_encoder_path = ${tomlPath(m.text_encoder_path || '')}`);
+                        lines.push(`vae_path = ${tomlPath(m.vae_path || '')}`);
+                        lines.push(`transformer_dtype = ${tomlString(m.transformer_dtype || 'float8')}`);
                         lines.push(`max_sequence_length = ${Number(m.max_sequence_length || 768)}`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'logit_normal')}`);
                         break;
 
                     case 'flux2':
@@ -709,64 +744,64 @@ export function ModelTrainingPage({
                     case 'hunyuan_video_15':
                     case 'ideogram4':
                     case 'ernie_image':
-                        lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae = '${(m.vae ?? m.vae_path ?? '').replace(/\\/g, '/')}'`);
+                        lines.push(`diffusion_model = ${tomlPath(m.diffusion_model ?? m.diffusion_path ?? '')}`);
+                        lines.push(`vae = ${tomlPath(m.vae ?? m.vae_path ?? '')}`);
                         lines.push(`shift = ${formatValue(m.shift || 1)}`);
-                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = ${tomlString(m.diffusion_model_dtype)}`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'logit_normal')}`);
 
                         const tePath = m.text_encoder_path ?? m.text_encoder ?? m.Text_Encoder ?? '';
                         const teType = m.model_type === 'z_image' ? 'lumina2' : (m.model_type === 'hunyuan_video_15' ? 'hunyuan_video_15' : (m.model_type === 'ideogram4' ? 'ideogram4' : 'flux2'));
 
                         if (m.model_type === 'hunyuan_video_15') {
                             const b5Path = m.byt5_path || '';
-                            lines.push(`text_encoders = [{ paths = ['${tePath.replace(/\\/g, '/')}', '${b5Path.replace(/\\/g, '/')}'], type = '${teType}' }]`);
+                            lines.push(`text_encoders = [{ paths = [${tomlPath(tePath)}, ${tomlPath(b5Path)}], type = ${tomlString(teType)} }]`);
                         } else {
-                            lines.push(`text_encoders = [{ path = '${tePath.replace(/\\/g, '/')}', type = '${teType}' }]`);
+                            lines.push(`text_encoders = [{ path = ${tomlPath(tePath)}, type = ${tomlString(teType)} }]`);
                         }
 
                         if (m.merge_adapters) {
                             const adapters = Array.isArray(m.merge_adapters) ? m.merge_adapters : [m.merge_adapters];
-                            lines.push(`merge_adapters = [${adapters.map((a: string) => `'${a.replace(/\\/g, '/')}'`).join(', ')}]`);
+                            lines.push(`merge_adapters = [${adapters.map(tomlPath).join(', ')}]`);
                         }
                         break;
                     case 'anima':
-                        lines.push(`transformer_path = '${(m.transformer_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae_path = '${(m.vae_path || '').replace(/\\/g, '/')}'`);
-                        lines.push(`llm_path = '${(m.llm_path || '').replace(/\\/g, '/')}'`);
+                        lines.push(`transformer_path = ${tomlPath(m.transformer_path || '')}`);
+                        lines.push(`vae_path = ${tomlPath(m.vae_path || '')}`);
+                        lines.push(`llm_path = ${tomlPath(m.llm_path || '')}`);
                         lines.push(`llm_adapter_lr = ${formatValue(m.llm_adapter_lr ?? 0)}`);
                         break;
 
                     case 'krea2': {
-                        lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae = '${(m.vae ?? m.vae_path ?? '').replace(/\\/g, '/')}'`);
-                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        lines.push(`diffusion_model = ${tomlPath(m.diffusion_model ?? m.diffusion_path ?? '')}`);
+                        lines.push(`vae = ${tomlPath(m.vae ?? m.vae_path ?? '')}`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = ${tomlString(m.diffusion_model_dtype)}`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'logit_normal')}`);
                         const kreaTePath = (m.text_encoder_path ?? m.text_encoder ?? '') as string;
-                        lines.push(`text_encoders = [{ path = '${kreaTePath.replace(/\\/g, '/')}', type = 'krea2' }]`);
+                        lines.push(`text_encoders = [{ path = ${tomlPath(kreaTePath)}, type = "krea2" }]`);
                         break;
                     }
 
                     case 'ltx2':
-                        lines.push(`diffusion_model = '${(m.diffusion_model ?? m.diffusion_path ?? '').replace(/\\/g, '/')}'`);
-                        lines.push(`text_encoder = '${(m.text_encoder ?? m.text_encoder_path ?? '').replace(/\\/g, '/')}'`);
-                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'logit_normal'}'`);
+                        lines.push(`diffusion_model = ${tomlPath(m.diffusion_model ?? m.diffusion_path ?? '')}`);
+                        lines.push(`text_encoder = ${tomlPath(m.text_encoder ?? m.text_encoder_path ?? '')}`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = ${tomlString(m.diffusion_model_dtype)}`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'logit_normal')}`);
                         lines.push(`shift = ${formatValue(m.shift ?? 1)}`);
                         if (m.merge_adapters) {
                             const adapters = Array.isArray(m.merge_adapters) ? m.merge_adapters : [m.merge_adapters];
-                            lines.push(`merge_adapters = [${adapters.map((a: string) => `'${a.replace(/\\/g, '/')}'`).join(', ')}]`);
+                            lines.push(`merge_adapters = [${adapters.map(tomlPath).join(', ')}]`);
                         }
                         break;
 
                     case 'minimax_h3': {
-                        lines.push(`diffusion_model = '${(m.diffusion_model || '').replace(/\\/g, '/')}'`);
-                        lines.push(`vae = '${(m.vae || '').replace(/\\/g, '/')}'`);
-                        lines.push(`audio_vae = '${(m.audio_vae || '').replace(/\\/g, '/')}'`);
+                        lines.push(`diffusion_model = ${tomlPath(m.diffusion_model || '')}`);
+                        lines.push(`vae = ${tomlPath(m.vae || '')}`);
+                        lines.push(`audio_vae = ${tomlPath(m.audio_vae || '')}`);
                         const minimaxTextEncoderPath = (m.text_encoder_path || '') as string;
-                        lines.push(`text_encoders = [{ path = '${minimaxTextEncoderPath.replace(/\\/g, '/')}', type = 'minimax' }]`);
-                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = '${m.diffusion_model_dtype}'`);
-                        lines.push(`timestep_sample_method = '${m.timestep_sample_method || 'uniform'}'`);
+                        lines.push(`text_encoders = [{ path = ${tomlPath(minimaxTextEncoderPath)}, type = "minimax" }]`);
+                        if (m.diffusion_model_dtype) lines.push(`diffusion_model_dtype = ${tomlString(m.diffusion_model_dtype)}`);
+                        lines.push(`timestep_sample_method = ${tomlString(m.timestep_sample_method || 'uniform')}`);
                         lines.push(`shift = ${formatValue(m.shift ?? 8)}`);
                         lines.push(`image_shift = ${formatValue(m.image_shift ?? 1)}`);
                         if (m.cfg !== undefined && m.cfg !== null && String(m.cfg).trim() !== '') {
@@ -776,7 +811,7 @@ export function ModelTrainingPage({
                             const adapters = Array.isArray(m.merge_adapters) ? m.merge_adapters : [m.merge_adapters];
                             const adapterPaths = adapters.filter((adapter: unknown): adapter is string => typeof adapter === 'string' && adapter.trim() !== '');
                             if (adapterPaths.length > 0) {
-                                lines.push(`merge_adapters = [${adapterPaths.map((adapter: string) => `'${adapter.replace(/\\/g, '/')}'`).join(', ')}]`);
+                                lines.push(`merge_adapters = [${adapterPaths.map(tomlPath).join(', ')}]`);
                             }
                         }
                         break;
@@ -796,7 +831,7 @@ export function ModelTrainingPage({
             if (fullConfig.optimizer) {
                 const optType = fullConfig.optimizer.optimizer_type || 'adamw_optimi';
                 lines.push('\n[optimizer]');
-                lines.push(`type = '${optType}'`);
+                lines.push(`type = ${tomlString(optType)}`);
 
                 if (optType === 'automagic') {
                     // For automagic, only keep weight_decay
@@ -822,7 +857,7 @@ export function ModelTrainingPage({
             const adapterType = fullConfig.adapter?.adapter_type || 'lora';
             if (adapterType !== 'none') {
                 lines.push('\n[adapter]');
-                lines.push(`type = '${adapterType}'`);
+                lines.push(`type = ${tomlString(adapterType)}`);
                 // Need to provide defaults if values are missing from state
                 const rank = fullConfig.adapter?.rank || (adapterType === 'lokr' ? 1000000 : 32);
                 const dtype = fullConfig.adapter?.dtype || 'bfloat16';
@@ -830,14 +865,14 @@ export function ModelTrainingPage({
                 if (adapterType === 'lokr') {
                     lines.push(`decompose_factor = ${formatValue(fullConfig.adapter?.decompose_factor ?? 4)}`);
                 }
-                lines.push(`dtype = '${dtype}'`);
+                lines.push(`dtype = ${tomlString(dtype)}`);
                 if (adapterType !== 'lokr') {
                     const dropout = fullConfig.adapter?.dropout ?? 0.0;
                     lines.push(`dropout = ${formatValue(dropout)}`);
                 }
 
                 if (fullConfig.adapter?.init_from_existing) {
-                    lines.push(`init_from_existing = '${fullConfig.adapter.init_from_existing.replace(/\\/g, '\\\\')}'`);
+                    lines.push(`init_from_existing = ${tomlPath(fullConfig.adapter.init_from_existing)}`);
                 }
             }
 
@@ -845,19 +880,19 @@ export function ModelTrainingPage({
             if (fullConfig.monitoring && fullConfig.monitoring.enable_wandb) {
                 lines.push('\n[monitoring]');
                 lines.push(`enable_wandb = true`);
-                lines.push(`wandb_api_key = '${fullConfig.monitoring.wandb_api_key || ''}'`);
-                lines.push(`wandb_tracker_name = '${fullConfig.monitoring.wandb_tracker_name || ''}'`);
-                lines.push(`wandb_run_name = '${fullConfig.monitoring.wandb_run_name || ''}'`);
+                lines.push(`wandb_api_key = ${tomlString(fullConfig.monitoring.wandb_api_key || '')}`);
+                lines.push(`wandb_tracker_name = ${tomlString(fullConfig.monitoring.wandb_tracker_name || '')}`);
+                lines.push(`wandb_run_name = ${tomlString(fullConfig.monitoring.wandb_run_name || '')}`);
             } else {
                 lines.push('\n[monitoring]');
                 lines.push(`enable_wandb = false`);
             }
 
-            const tomlString = lines.join('\n');
+            const tomlContent = lines.join('\n');
 
             const result = await ipc.invoke('save-to-date-folder', {
                 filename: 'trainconfig.toml',
-                content: tomlString
+                content: tomlContent
             });
 
             if (result.success) {

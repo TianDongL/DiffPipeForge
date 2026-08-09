@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import base64
+from collections import deque
 import hashlib
 import json
 import mimetypes
@@ -13,9 +14,10 @@ import subprocess
 import sys
 import time
 import traceback
+import uuid
 import webbrowser
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 try:
@@ -23,7 +25,7 @@ try:
 except ImportError:  # pragma: no cover
     import tomli as tomllib  # type: ignore
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,10 +44,18 @@ LOG_DIR = PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="DiffPipe Forge WebUI")
+web_cors_origins = [
+    item.strip()
+    for item in os.environ.get("DIFFPIPE_WEB_CORS_ORIGINS", "").split(",")
+    if item.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    # The browser build uses same-origin URLs (the Vite development server
+    # proxies /api and /ws), so cross-origin access is opt-in.  This prevents
+    # an unrelated web page from driving the powerful local IPC bridge.
+    allow_origins=web_cors_origins,
+    allow_credentials=bool(web_cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -70,6 +80,61 @@ latest_monitor_stats: Any = None
 active_monitor_process: asyncio.subprocess.Process | None = None
 tensorboard_url = ""
 
+WEB_MODEL_EXTENSIONS = {
+    ".safetensors",
+    ".pt",
+    ".pth",
+    ".ckpt",
+    ".bin",
+    ".gguf",
+}
+WEB_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+WEB_UPLOAD_FILE_EXTENSIONS = WEB_VIDEO_EXTENSIONS | {".txt"}
+WEB_MAX_UPLOAD_FILE_BYTES = int(os.environ.get("DIFFPIPE_WEB_MAX_UPLOAD_FILE_BYTES", str(8 * 1024**3)))
+WEB_MAX_UPLOAD_SESSION_BYTES = int(os.environ.get("DIFFPIPE_WEB_MAX_UPLOAD_SESSION_BYTES", str(100 * 1024**3)))
+WEB_MAX_CAPTION_BYTES = int(os.environ.get("DIFFPIPE_WEB_MAX_CAPTION_BYTES", str(4 * 1024**2)))
+WEB_MAX_PENDING_UPLOAD_SESSIONS = int(os.environ.get("DIFFPIPE_WEB_MAX_PENDING_UPLOAD_SESSIONS", "8"))
+WEB_MAX_PENDING_UPLOAD_BYTES = int(
+    os.environ.get("DIFFPIPE_WEB_MAX_PENDING_UPLOAD_BYTES", str(WEB_MAX_UPLOAD_SESSION_BYTES))
+)
+WEB_MAX_BROWSE_ENTRIES = 500
+WEB_MAX_SEARCH_RESULTS = 200
+WEB_MAX_SEARCH_SCANNED = 50_000
+WEB_MAX_SEARCH_DEPTH = 8
+WEB_UPLOAD_STALE_SECONDS = int(os.environ.get("DIFFPIPE_WEB_UPLOAD_STALE_SECONDS", str(24 * 60 * 60)))
+WEB_UPLOAD_IN_PROGRESS_MARKER = ".diffpipe-upload-in-progress.json"
+WEB_UPLOAD_COMPLETE_MARKER = ".diffpipe-upload-complete.json"
+WEB_UPLOAD_SESSION_PATTERN = re.compile(r"^dataset-\d{8}-\d{6}-[a-f0-9]{10}$")
+
+MINIMAX_H3_FILES: dict[str, dict[str, Any]] = {
+    "diffusion_model": {
+        "path": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "size": 20_970_379_616,
+        "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a",
+    },
+    "text_encoder_path": {
+        "path": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+        "size": 27_141_342_152,
+        "sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923",
+    },
+    "vae": {
+        "path": "vae/minimax_h3_video_vae_fp16.safetensors",
+        "size": 5_207_808_496,
+        "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522",
+    },
+    "audio_vae": {
+        "path": "vae/minimax_h3_audio_vae_fp32.safetensors",
+        "size": 605_254_808,
+        "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+    },
+}
+
+model_download_jobs: dict[str, dict[str, Any]] = {}
+model_download_tasks: dict[str, asyncio.Task[Any]] = {}
+minimax_hash_cache: dict[tuple[str, int, int, str], bool] = {}
+upload_lock = asyncio.Lock()
+model_download_start_lock = asyncio.Lock()
+
 
 def channel(name: str):
     def decorator(fn: Callable[..., Any]):
@@ -77,6 +142,595 @@ def channel(name: str):
         return fn
 
     return decorator
+
+
+def _split_env_paths(name: str) -> list[Path]:
+    raw = os.environ.get(name, "")
+    return [Path(item).expanduser() for item in raw.split(os.pathsep) if item.strip()]
+
+
+def _nearest_existing_parent(path: Path) -> Path | None:
+    candidate = path.expanduser()
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    return candidate if candidate.exists() else None
+
+
+def _ensure_upload_disk_space(path: Path, bytes_needed: int) -> None:
+    anchor = _nearest_existing_parent(path)
+    if anchor is None:
+        raise HTTPException(status_code=400, detail="Upload target has no existing parent")
+    reserve = int(os.environ.get("DIFFPIPE_WEB_UPLOAD_FREE_RESERVE_BYTES", str(1024**3)))
+    if shutil.disk_usage(anchor).free < max(0, bytes_needed) + max(0, reserve):
+        raise HTTPException(status_code=507, detail="Not enough free space for this dataset upload")
+
+
+def _is_writable_path(path: Path) -> bool:
+    anchor = path if path.exists() else _nearest_existing_parent(path)
+    return bool(anchor and anchor.is_dir() and os.access(anchor, os.W_OK | os.X_OK))
+
+
+def _canonical_existing_directory(path: Path) -> Path | None:
+    try:
+        resolved = path.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    return resolved if resolved.is_dir() else None
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _mount_info(path: Path) -> dict[str, str]:
+    if os.name == "nt":
+        return {"source": path.drive or "local", "filesystem": "windows", "mountPoint": path.drive or ""}
+
+    best: tuple[int, str, str, str] | None = None
+    try:
+        for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8", errors="replace").splitlines():
+            left, right = line.split(" - ", 1)
+            left_fields = left.split()
+            right_fields = right.split()
+            if len(left_fields) < 5 or len(right_fields) < 2:
+                continue
+            mount_point = Path(
+                left_fields[4]
+                .replace("\\040", " ")
+                .replace("\\011", "\t")
+                .replace("\\134", "\\")
+            ).resolve(strict=False)
+            if _path_within(path, mount_point):
+                score = len(mount_point.parts)
+                if best is None or score > best[0]:
+                    best = (score, right_fields[1], right_fields[0], str(mount_point))
+    except (OSError, ValueError):
+        pass
+    if best:
+        return {"source": best[1], "filesystem": best[2], "mountPoint": best[3]}
+    return {"source": "local", "filesystem": "unknown", "mountPoint": ""}
+
+
+def _is_platform_persistent_base(path: Path) -> bool:
+    resolved = _canonical_existing_directory(path)
+    if resolved is None or os.name == "nt":
+        return False
+    mount_point_raw = _mount_info(resolved).get("mountPoint", "")
+    if not mount_point_raw:
+        return False
+    mount_point = Path(mount_point_raw).resolve(strict=False)
+    return mount_point != Path("/") and _path_within(resolved, mount_point)
+
+
+def _storage_kind(path: Path) -> str:
+    posix = path.as_posix()
+    if (posix == "/cloud" or posix.startswith("/cloud/")) and _is_platform_persistent_base(Path("/cloud")):
+        return "persistent"
+    if (posix == "/usrdata" or posix.startswith("/usrdata/")) and _is_platform_persistent_base(Path("/usrdata")):
+        return "persistent"
+    if posix in {"/model", "/models"} or posix.startswith("/model/") or posix.startswith("/models/"):
+        return "public_models"
+    if posix == "/workspace" or posix.startswith("/workspace/"):
+        return "temporary"
+    return "local"
+
+
+def _web_upload_root() -> Path:
+    configured = os.environ.get("DIFFPIPE_WEB_UPLOAD_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve(strict=False)
+    if os.name != "nt":
+        for base in (Path("/cloud"), Path("/usrdata")):
+            if _is_platform_persistent_base(base) and _is_writable_path(base):
+                return (base / "DiffPipeForge" / "uploads").resolve(strict=False)
+    return (PROJECT_ROOT / "web_uploads").resolve(strict=False)
+
+
+def _recommended_output_base() -> Path:
+    configured = os.environ.get("DIFFPIPE_WEB_OUTPUT_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve(strict=False)
+    if os.name != "nt":
+        for base in (Path("/cloud"), Path("/usrdata"), Path("/workspace")):
+            mounted_or_workspace = base == Path("/workspace") or _is_platform_persistent_base(base)
+            if mounted_or_workspace and _canonical_existing_directory(base) and _is_writable_path(base):
+                return (base / "DiffPipeForge").resolve(strict=False)
+    return PROJECT_ROOT.resolve()
+
+
+def _recommended_model_base() -> Path:
+    configured = os.environ.get("DIFFPIPE_WEB_MODEL_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve(strict=False)
+    if os.name != "nt":
+        for base, relative in ((Path("/cloud"), "DiffPipeForge/models"), (Path("/usrdata"), "models")):
+            if _is_platform_persistent_base(base) and _is_writable_path(base):
+                return (base / relative).resolve(strict=False)
+    return (PROJECT_ROOT / "models").resolve(strict=False)
+
+
+def _web_root_candidates() -> list[tuple[Path, str]]:
+    candidates: list[tuple[Path, str]] = [
+        (PROJECT_ROOT, "project"),
+        (_web_upload_root(), "uploads"),
+    ]
+    if os.name != "nt":
+        candidates.extend(
+            [
+                *(([(Path("/cloud"), "cloud")] if _is_platform_persistent_base(Path("/cloud")) else [])),
+                *(([(Path("/usrdata"), "usrdata")] if _is_platform_persistent_base(Path("/usrdata")) else [])),
+                (Path("/model"), "model"),
+                (Path("/models"), "models"),
+            ]
+        )
+    candidates.extend((path, "configured") for path in _split_env_paths("DIFFPIPE_WEB_BROWSE_ROOTS"))
+
+    deduped: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for candidate, role in candidates:
+        resolved = _canonical_existing_directory(candidate)
+        if resolved is None:
+            continue
+        key = os.path.normcase(str(resolved))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((resolved, role))
+    return deduped
+
+
+def _download_roots() -> list[Path]:
+    configured_single = os.environ.get("DIFFPIPE_WEB_MODEL_ROOT", "").strip()
+    candidates = [
+        PROJECT_ROOT / "models",
+        *([Path(configured_single).expanduser()] if configured_single else []),
+        *_split_env_paths("DIFFPIPE_WEB_MODEL_ROOTS"),
+    ]
+    if os.name != "nt":
+        mounted_candidates: list[Path] = []
+        if _is_platform_persistent_base(Path("/cloud")):
+            mounted_candidates.append(Path("/cloud/DiffPipeForge/models"))
+        if _is_platform_persistent_base(Path("/usrdata")):
+            mounted_candidates.append(Path("/usrdata/models"))
+        candidates[:0] = mounted_candidates
+    roots: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve(strict=False)
+        if _nearest_existing_parent(resolved) and _is_writable_path(resolved):
+            roots.append(resolved)
+    return roots
+
+
+def _root_record(path: Path, role: str) -> dict[str, Any]:
+    mount = _mount_info(path)
+    kind = "public_models" if role in {"model", "models"} else _storage_kind(path)
+    writable = _is_writable_path(path) and kind != "public_models"
+    root_id = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12]
+    return {
+        "id": root_id,
+        "path": str(path),
+        "name": path.name or str(path),
+        "role": role,
+        "storageKind": kind,
+        "writable": writable,
+        "source": mount["source"],
+        "filesystem": mount["filesystem"],
+    }
+
+
+def _browse_root_role(root: Path) -> str | None:
+    root_key = os.path.normcase(str(root.resolve(strict=False)))
+    for candidate, role in _web_root_candidates():
+        if os.path.normcase(str(candidate)) == root_key:
+            return role
+    return None
+
+
+def _resolve_browse_path(raw_path: str, *, must_exist: bool = True) -> tuple[Path, Path]:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise HTTPException(status_code=400, detail="Path is required")
+    candidate = Path(raw_path.strip()).expanduser()
+    if not candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="Only absolute server paths are allowed")
+    try:
+        resolved = candidate.resolve(strict=must_exist)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid server path: {exc}") from exc
+
+    containing = [root for root, _role in _web_root_candidates() if _path_within(resolved, root)]
+    if not containing:
+        raise HTTPException(status_code=403, detail="Path is outside the allowed WebUI roots")
+    root = max(containing, key=lambda item: len(item.parts))
+    if must_exist and not resolved.exists():
+        raise HTTPException(status_code=404, detail="Path does not exist")
+    return resolved, root
+
+
+def _validate_leaf_name(name: str) -> str:
+    if not isinstance(name, str):
+        raise HTTPException(status_code=400, detail="Invalid file or folder name")
+    name = name.strip()
+    if not name or name in {".", ".."} or len(name) > 255:
+        raise HTTPException(status_code=400, detail="Invalid file or folder name")
+    if "/" in name or "\\" in name or ":" in name or any(ord(char) < 32 for char in name):
+        raise HTTPException(status_code=400, detail="Names cannot contain path separators or control characters")
+    if os.name == "nt":
+        stem = name.split(".", 1)[0].casefold()
+        reserved = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+        if name.endswith((".", " ")) or stem in reserved:
+            raise HTTPException(status_code=400, detail="This name is reserved by Windows")
+    return name
+
+
+def _entry_payload(path: Path) -> dict[str, Any]:
+    stat_result = path.stat(follow_symlinks=False)
+    is_dir = path.is_dir() and not path.is_symlink()
+    suffix = path.suffix.lower() if not is_dir else ""
+    return {
+        "name": path.name,
+        "path": str(path.resolve(strict=True)),
+        "type": "directory" if is_dir else "file",
+        "size": 0 if is_dir else stat_result.st_size,
+        "modified": stat_result.st_mtime,
+        "extension": suffix,
+        "modelCandidate": (not is_dir and suffix in WEB_MODEL_EXTENSIONS),
+    }
+
+
+def _safe_relative_repo_file(raw_path: str) -> str:
+    value = raw_path.strip().replace("\\", "/")
+    pure = PurePosixPath(value)
+    if (
+        not value
+        or value.startswith("/")
+        or len(value) > 500
+        or ":" in value
+        or any(part in {"", ".", ".."} for part in pure.parts)
+        or any(ord(char) < 32 for char in value)
+    ):
+        raise HTTPException(status_code=400, detail=f"Invalid repository file path: {raw_path}")
+    return pure.as_posix()
+
+
+def _download_file_path(target_dir: Path, relative_path: str) -> Path:
+    target_root = target_dir.resolve(strict=False)
+    candidate = (target_root / Path(relative_path)).resolve(strict=False)
+    if not _path_within(candidate, target_root):
+        raise RuntimeError(f"Repository file leaves the selected model directory: {relative_path}")
+    return candidate
+
+
+def _resolve_download_target(raw_path: str) -> Path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise HTTPException(status_code=400, detail="Download target directory is required")
+    candidate = Path(raw_path.strip()).expanduser()
+    if not candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="Download target must be an absolute server path")
+    try:
+        resolved = candidate.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid download target: {exc}") from exc
+    if not any(_path_within(resolved, root) for root in _download_roots()):
+        raise HTTPException(status_code=403, detail="Download target is outside the allowed model roots")
+    if not _is_writable_path(resolved):
+        raise HTTPException(status_code=403, detail="Download target is not writable")
+    return resolved
+
+
+def _directory_bytes(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return total
+    for root, _dirs, files in os.walk(path):
+        for filename in files:
+            try:
+                total += (Path(root) / filename).stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _download_progress_bytes(target_dir: Path, files: list[dict[str, Any]]) -> int:
+    total = 0
+    for item in files:
+        try:
+            path = _download_file_path(target_dir, item["path"])
+            if path.is_file():
+                total += path.stat().st_size
+        except (OSError, RuntimeError):
+            continue
+    cache_root = target_dir / ".cache"
+    if cache_root.is_dir():
+        for path in cache_root.rglob("*"):
+            try:
+                if path.is_file() and path.name.endswith((".incomplete", ".partial", ".part")):
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _discover_minimax_h3_files() -> dict[str, Any]:
+    by_filename = {Path(item["path"]).name: (field, item) for field, item in MINIMAX_H3_FILES.items()}
+    roots: list[Path] = []
+    configured_single = os.environ.get("DIFFPIPE_WEB_MODEL_ROOT", "").strip()
+    discovery_candidates: list[Path] = [
+        PROJECT_ROOT / "models",
+        *([Path(configured_single).expanduser()] if configured_single else []),
+        *_split_env_paths("DIFFPIPE_WEB_MODEL_ROOTS"),
+    ]
+    if os.name != "nt":
+        platform_candidates = [Path("/model"), Path("/models")]
+        platform_candidates.extend(
+            base for base in (Path("/cloud"), Path("/usrdata")) if _is_platform_persistent_base(base)
+        )
+        discovery_candidates[:0] = platform_candidates
+    for candidate in discovery_candidates:
+        resolved = _canonical_existing_directory(candidate)
+        if resolved and resolved not in roots:
+            roots.append(resolved)
+
+    candidates: dict[str, list[str]] = {field: [] for field in MINIMAX_H3_FILES}
+    scanned = 0
+    pruned_names = {".git", ".cache", ".venv", "node_modules", "__pycache__", "cache"}
+    for root in roots:
+        for current, dirs, files in os.walk(root, followlinks=False):
+            current_path = Path(current)
+            try:
+                depth = len(current_path.relative_to(root).parts)
+            except ValueError:
+                continue
+            dirs[:] = [
+                name
+                for name in dirs
+                if name not in pruned_names and not name.startswith(".") and depth < 10
+            ]
+            for filename in files:
+                scanned += 1
+                match = by_filename.get(filename)
+                if match:
+                    field, metadata = match
+                    path = current_path / filename
+                    try:
+                        if path.is_symlink() or not path.is_file() or path.stat().st_size != metadata["size"]:
+                            continue
+                        resolved_path = path.resolve(strict=True)
+                        if not _path_within(resolved_path, root):
+                            continue
+                        stat_result = resolved_path.stat()
+                        cache_key = (
+                            str(resolved_path),
+                            stat_result.st_size,
+                            stat_result.st_mtime_ns,
+                            metadata["sha256"],
+                        )
+                        valid_hash = minimax_hash_cache.get(cache_key)
+                        if valid_hash is None:
+                            digest = hashlib.sha256()
+                            with resolved_path.open("rb") as stream:
+                                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                                    digest.update(chunk)
+                            valid_hash = digest.hexdigest().lower() == metadata["sha256"].lower()
+                            minimax_hash_cache[cache_key] = valid_hash
+                        if valid_hash:
+                            candidates[field].append(str(resolved_path))
+                    except OSError:
+                        pass
+                if scanned >= 250_000:
+                    break
+            if scanned >= 250_000:
+                break
+        if scanned >= 250_000:
+            break
+
+    grouped: dict[str, dict[str, str]] = {}
+    for field, paths in candidates.items():
+        category = Path(MINIMAX_H3_FILES[field]["path"]).parts[0]
+        for raw_path in paths:
+            path = Path(raw_path)
+            base = path.parent.parent if path.parent.name == category else path.parent
+            grouped.setdefault(str(base), {})[field] = raw_path
+    complete_groups = [mapping for mapping in grouped.values() if set(mapping) == set(MINIMAX_H3_FILES)]
+    complete_groups.sort(
+        key=lambda mapping: (
+            0 if _storage_kind(Path(mapping["diffusion_model"])) == "persistent" else 1,
+            mapping["diffusion_model"],
+        )
+    )
+    path_map = complete_groups[0] if complete_groups else {
+        field: paths[0] for field, paths in candidates.items() if paths
+    }
+    return {
+        "complete": set(path_map) == set(MINIMAX_H3_FILES),
+        "pathMap": path_map,
+        "candidates": candidates,
+        "verifiedBy": "sha256",
+        "scanned": scanned,
+        "truncated": scanned >= 250_000,
+    }
+
+
+def _redact_download_error(message: str) -> str:
+    redacted = message
+    for env_name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "MODELSCOPE_API_TOKEN"):
+        secret = os.environ.get(env_name, "")
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    redacted = re.sub(r"hf_[A-Za-z0-9]{8,}", "hf_[REDACTED]", redacted)
+    redacted = re.sub(r"(?i)(authorization\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", redacted)
+    return redacted[:2000]
+
+
+def _verify_download(path: Path, expected_size: int | None, expected_sha256: str | None) -> None:
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise RuntimeError(f"Downloaded file is missing: {path.name}")
+    if expected_size is not None and path.stat().st_size != expected_size:
+        raise RuntimeError(
+            f"Size verification failed for {path.name}: expected {expected_size}, got {path.stat().st_size}"
+        )
+    if expected_sha256:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        actual = digest.hexdigest()
+        if actual.lower() != expected_sha256.lower():
+            raise RuntimeError(f"SHA-256 verification failed for {path.name}")
+
+
+def _quarantine_invalid_download(path: Path) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.name}.invalid-{timestamp}")
+    counter = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}.invalid-{timestamp}-{counter}")
+        counter += 1
+    path.replace(candidate)
+    return candidate
+
+
+def _download_model_file(
+    source: str,
+    repo_id: str,
+    revision: str,
+    relative_path: str,
+    target_dir: Path,
+) -> Path:
+    target_dir = _resolve_download_target(str(target_dir))
+    expected_path = _download_file_path(target_dir, relative_path)
+    expected_path.parent.mkdir(parents=True, exist_ok=True)
+    if source == "huggingface":
+        from huggingface_hub import hf_hub_download
+
+        result = hf_hub_download(
+            repo_id=repo_id,
+            filename=relative_path,
+            revision=revision,
+            local_dir=str(target_dir),
+            token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None,
+        )
+    elif source == "modelscope":
+        token = os.environ.get("MODELSCOPE_API_TOKEN") or None
+        cookies = None
+        if token:
+            from modelscope.hub.api import HubApi
+
+            cookies = HubApi().get_cookies(token)
+        from modelscope.hub.file_download import model_file_download
+
+        result = model_file_download(
+            model_id=repo_id,
+            file_path=relative_path,
+            revision=revision,
+            local_dir=str(target_dir),
+            cookies=cookies,
+        )
+    else:  # Defensive guard; the request validator rejects this earlier.
+        raise RuntimeError("Unsupported model source")
+
+    target_dir = _resolve_download_target(str(target_dir))
+    expected_path = _download_file_path(target_dir, relative_path)
+    result_path = Path(result).resolve(strict=True) if result else expected_path.resolve(strict=True)
+    if not expected_path.exists() and result_path.is_file():
+        expected_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(result_path, expected_path)
+    final_path = expected_path.resolve(strict=True)
+    if not _path_within(final_path, target_dir):
+        raise RuntimeError(f"Downloaded file leaves the selected model directory: {relative_path}")
+    return final_path
+
+
+async def _run_model_download(job_id: str, spec: dict[str, Any]) -> None:
+    job = model_download_jobs[job_id]
+    target_dir = Path(spec["targetDir"])
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        job.update(status="running", updatedAt=time.time())
+        for index, item in enumerate(spec["files"]):
+            target_dir = _resolve_download_target(str(spec["targetDir"]))
+            relative_path = item["path"]
+            expected_path = _download_file_path(target_dir, relative_path)
+            expected_size = item.get("size")
+            expected_sha256 = item.get("sha256")
+            job.update(currentFile=relative_path, currentFileIndex=index, updatedAt=time.time())
+
+            # Only a content hash can prove that an existing same-name file
+            # belongs to this manifest/revision. Size alone is not a safe
+            # fast-path; let the official client validate/refetch it.
+            if expected_path.is_file() and expected_sha256 is not None:
+                try:
+                    await asyncio.to_thread(_verify_download, expected_path, expected_size, expected_sha256)
+                    job["completedFiles"] = index + 1
+                    job["bytesDownloaded"] = await asyncio.to_thread(_download_progress_bytes, target_dir, spec["files"])
+                    field_name = item.get("field")
+                    if field_name:
+                        job["pathMap"][field_name] = str(expected_path.resolve(strict=True))
+                    continue
+                except RuntimeError:
+                    # Keep the bad artifact recoverable, then let the official
+                    # client resume/redownload without requiring shell access.
+                    await asyncio.to_thread(_quarantine_invalid_download, expected_path)
+
+            future = asyncio.create_task(
+                asyncio.to_thread(
+                    _download_model_file,
+                    spec["source"],
+                    spec["repoId"],
+                    spec["revision"],
+                    relative_path,
+                    target_dir,
+                )
+            )
+            while not future.done():
+                job["bytesDownloaded"] = await asyncio.to_thread(_download_progress_bytes, target_dir, spec["files"])
+                job["updatedAt"] = time.time()
+                await asyncio.sleep(1)
+            downloaded_path = await future
+            await asyncio.to_thread(_verify_download, downloaded_path, expected_size, expected_sha256)
+            job["completedFiles"] = index + 1
+            job["bytesDownloaded"] = await asyncio.to_thread(_download_progress_bytes, target_dir, spec["files"])
+            field_name = item.get("field")
+            if field_name:
+                job["pathMap"][field_name] = str(downloaded_path)
+
+        job.update(
+            status="completed",
+            currentFile=None,
+            completedFiles=len(spec["files"]),
+            bytesDownloaded=await asyncio.to_thread(_download_progress_bytes, target_dir, spec["files"]),
+            updatedAt=time.time(),
+        )
+    except asyncio.CancelledError:
+        job.update(status="interrupted", error="Download task was interrupted; start it again to resume.", updatedAt=time.time())
+        raise
+    except Exception as exc:
+        job.update(status="error", error=_redact_download_error(str(exc)), updatedAt=time.time())
+    finally:
+        model_download_tasks.pop(job_id, None)
 
 
 def load_settings() -> dict[str, Any]:
@@ -382,6 +1036,531 @@ async def ipc_call(channel_name: str, args: list[Any]):
         return {"error": str(exc)}
 
 
+@app.get("/api/web-resources/roots")
+def web_resource_roots():
+    roots = [_root_record(path, role) for path, role in _web_root_candidates()]
+    recommended_output = _recommended_output_base()
+    recommended_model = _recommended_model_base()
+    return {
+        "roots": roots,
+        "uploadRoot": str(_web_upload_root()),
+        "recommendedOutputBase": {
+            "path": str(recommended_output),
+            "exists": recommended_output.is_dir(),
+            "writable": _is_writable_path(recommended_output),
+            "storageKind": _storage_kind(recommended_output),
+        },
+        "recommendedModelBase": {
+            "path": str(recommended_model),
+            "exists": recommended_model.is_dir(),
+            "writable": _is_writable_path(recommended_model),
+            "storageKind": _storage_kind(recommended_model),
+        },
+        "modelExtensions": sorted(WEB_MODEL_EXTENSIONS),
+        "uploadLimits": {
+            "maxFileBytes": WEB_MAX_UPLOAD_FILE_BYTES,
+            "maxSessionBytes": WEB_MAX_UPLOAD_SESSION_BYTES,
+            "maxCaptionBytes": WEB_MAX_CAPTION_BYTES,
+        },
+        "presets": {
+            "minimaxH3": {
+                "repoId": "Comfy-Org/MiniMax-H3",
+                "huggingfaceRevision": "014cd40f7e177756c6b2473c0d93b1c89a790dd2",
+                "modelscopeRevision": "master",
+                "files": [
+                    {"field": field, **metadata}
+                    for field, metadata in MINIMAX_H3_FILES.items()
+                ],
+            }
+        },
+    }
+
+
+@app.get("/api/web-resources/presets/minimax-h3/discover")
+async def discover_minimax_h3():
+    return await asyncio.to_thread(_discover_minimax_h3_files)
+
+
+@app.post("/api/web-resources/list")
+def web_resource_list(payload: dict[str, Any]):
+    path, allowed_root = _resolve_browse_path(str(payload.get("path") or ""))
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail="The selected path is not a directory")
+    model_only = bool(payload.get("modelOnly", False))
+    show_hidden = bool(payload.get("showHidden", False))
+
+    entries: list[dict[str, Any]] = []
+    truncated = False
+    try:
+        children = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
+        for child in children:
+            if child.is_symlink() or (not show_hidden and child.name.startswith(".")):
+                continue
+            if child.is_file() and model_only and child.suffix.lower() not in WEB_MODEL_EXTENSIONS:
+                continue
+            if not child.is_dir() and not child.is_file():
+                continue
+            try:
+                entries.append(_entry_payload(child))
+            except OSError:
+                continue
+            if len(entries) >= WEB_MAX_BROWSE_ENTRIES:
+                truncated = True
+                break
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="The server cannot read this directory") from exc
+
+    parent: str | None = None
+    if path != allowed_root:
+        candidate_parent = path.parent.resolve(strict=True)
+        if _path_within(candidate_parent, allowed_root):
+            parent = str(candidate_parent)
+    return {
+        "path": str(path),
+        "root": str(allowed_root),
+        "parent": parent,
+        "entries": entries,
+        "truncated": truncated,
+    }
+
+
+def _search_web_resources(payload: dict[str, Any]) -> dict[str, Any]:
+    start, allowed_root = _resolve_browse_path(str(payload.get("path") or ""))
+    if not start.is_dir():
+        raise HTTPException(status_code=400, detail="Search path must be a directory")
+    query = str(payload.get("query") or "").strip().casefold()
+    if len(query) < 2 or len(query) > 100:
+        raise HTTPException(status_code=400, detail="Search text must contain 2 to 100 characters")
+    mode = str(payload.get("mode") or "model")
+    if mode not in {"model", "file", "directory"}:
+        raise HTTPException(status_code=400, detail="Invalid search mode")
+
+    results: list[dict[str, Any]] = []
+    scanned = 0
+    queue: deque[tuple[Path, int]] = deque([(start, 0)])
+    while queue and scanned < WEB_MAX_SEARCH_SCANNED and len(results) < WEB_MAX_SEARCH_RESULTS:
+        current, depth = queue.popleft()
+        try:
+            with os.scandir(current) as iterator:
+                for entry in iterator:
+                    scanned += 1
+                    if scanned > WEB_MAX_SEARCH_SCANNED:
+                        break
+                    if entry.name.startswith(".") or entry.is_symlink():
+                        continue
+                    entry_path = Path(entry.path)
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if depth < WEB_MAX_SEARCH_DEPTH:
+                                queue.append((entry_path, depth + 1))
+                            if mode in {"directory", "model"} and query in entry.name.casefold():
+                                results.append(_entry_payload(entry_path))
+                        elif entry.is_file(follow_symlinks=False):
+                            suffix = entry_path.suffix.lower()
+                            matches_mode = mode == "file" or (mode == "model" and suffix in WEB_MODEL_EXTENSIONS)
+                            if matches_mode and query in entry.name.casefold():
+                                results.append(_entry_payload(entry_path))
+                    except OSError:
+                        continue
+                    if len(results) >= WEB_MAX_SEARCH_RESULTS:
+                        break
+        except (OSError, PermissionError):
+            continue
+    return {
+        "path": str(start),
+        "root": str(allowed_root),
+        "entries": sorted(results, key=lambda item: (item["type"] != "directory", item["name"].casefold())),
+        "scanned": scanned,
+        "truncated": bool(queue) or scanned >= WEB_MAX_SEARCH_SCANNED,
+    }
+
+
+@app.post("/api/web-resources/search")
+async def web_resource_search(payload: dict[str, Any]):
+    return await asyncio.to_thread(_search_web_resources, payload)
+
+
+@app.post("/api/web-resources/mkdir")
+def web_resource_mkdir(payload: dict[str, Any]):
+    parent, allowed_root = _resolve_browse_path(str(payload.get("parent") or ""))
+    if (
+        not parent.is_dir()
+        or not _is_writable_path(parent)
+        or _storage_kind(parent) == "public_models"
+        or _browse_root_role(allowed_root) in {"model", "models"}
+    ):
+        raise HTTPException(status_code=403, detail="Parent directory is not writable")
+    name = _validate_leaf_name(str(payload.get("name") or ""))
+    target = (parent / name).resolve(strict=False)
+    _resolve_browse_path(str(parent), must_exist=True)
+    if not any(_path_within(target, root) for root, _role in _web_root_candidates()):
+        raise HTTPException(status_code=403, detail="New directory would leave the allowed roots")
+    try:
+        target.mkdir(mode=0o755, parents=False, exist_ok=False)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail="A file or directory with this name already exists") from exc
+    return {"path": str(target.resolve(strict=True))}
+
+
+@app.post("/api/web-resources/ensure-directory")
+def web_resource_ensure_directory(payload: dict[str, Any]):
+    raw_path = str(payload.get("path") or "")
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="Directory path is required")
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="Only absolute server paths are allowed")
+    resolved = candidate.resolve(strict=False)
+    configured_single = os.environ.get("DIFFPIPE_WEB_OUTPUT_ROOT", "").strip()
+    allowed_bases = [
+        PROJECT_ROOT.resolve(),
+        *([Path(configured_single).expanduser()] if configured_single else []),
+        *_split_env_paths("DIFFPIPE_WEB_OUTPUT_ROOTS"),
+    ]
+    if os.name != "nt":
+        mounted_bases: list[Path] = []
+        for base in (Path("/cloud"), Path("/usrdata"), Path("/workspace")):
+            mounted_or_workspace = base == Path("/workspace") or _is_platform_persistent_base(base)
+            if mounted_or_workspace and _canonical_existing_directory(base):
+                mounted_bases.append((base / "DiffPipeForge").resolve(strict=False))
+        allowed_bases[:0] = mounted_bases
+    if not any(_path_within(resolved, base.resolve(strict=False)) for base in allowed_bases):
+        raise HTTPException(status_code=403, detail="Output directory is outside the allowed output roots")
+    if not _is_writable_path(resolved):
+        raise HTTPException(status_code=403, detail="Output directory is not writable")
+    resolved.mkdir(parents=True, exist_ok=True)
+    if not resolved.is_dir() or not _is_writable_path(resolved):
+        raise HTTPException(status_code=500, detail="Failed to create a writable output directory")
+    return {"path": str(resolved.resolve(strict=True))}
+
+
+def _pending_upload_sessions(root: Path) -> list[Path]:
+    return [
+        candidate
+        for candidate in root.iterdir()
+        if candidate.is_dir()
+        and WEB_UPLOAD_SESSION_PATTERN.fullmatch(candidate.name)
+        and (candidate / WEB_UPLOAD_IN_PROGRESS_MARKER).is_file()
+        and not (candidate / WEB_UPLOAD_COMPLETE_MARKER).exists()
+    ]
+
+
+@app.post("/api/web-resources/upload-session")
+async def create_upload_session():
+    root = _web_upload_root()
+    if not _is_writable_path(root):
+        raise HTTPException(status_code=403, detail="The configured WebUI upload root is not writable")
+    async with upload_lock:
+        root.mkdir(parents=True, exist_ok=True)
+        cutoff = time.time() - max(60, WEB_UPLOAD_STALE_SECONDS)
+        for candidate in _pending_upload_sessions(root):
+            try:
+                if candidate.stat().st_mtime < cutoff:
+                    shutil.rmtree(candidate)
+            except OSError:
+                continue
+        pending_sessions = _pending_upload_sessions(root)
+        if len(pending_sessions) >= max(1, WEB_MAX_PENDING_UPLOAD_SESSIONS):
+            raise HTTPException(status_code=429, detail="Too many unfinished dataset upload sessions")
+        pending_bytes = sum(_directory_bytes(candidate) for candidate in pending_sessions)
+        if pending_bytes >= max(1, WEB_MAX_PENDING_UPLOAD_BYTES):
+            raise HTTPException(status_code=507, detail="Unfinished dataset uploads reached the configured storage limit")
+        session_id = f"dataset-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:10]}"
+        session_dir = root / session_id
+        session_dir.mkdir(mode=0o755, parents=False, exist_ok=False)
+        (session_dir / WEB_UPLOAD_IN_PROGRESS_MARKER).write_text(
+            json.dumps({"createdAt": datetime.now().isoformat(timespec="seconds")}),
+            encoding="utf-8",
+        )
+        return {"sessionId": session_id, "path": str(session_dir.resolve(strict=True))}
+
+
+def _upload_session_directory(session_id: str) -> Path:
+    if WEB_UPLOAD_SESSION_PATTERN.fullmatch(session_id) is None:
+        raise HTTPException(status_code=400, detail="Invalid upload session")
+    root = _web_upload_root()
+    session_dir = (root / session_id).resolve(strict=False)
+    if not _path_within(session_dir, root.resolve(strict=False)) or not session_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    return session_dir
+
+
+@app.put("/api/web-resources/upload/{session_id}")
+async def upload_dataset_file(session_id: str, request: Request, filename: str):
+    safe_name = _validate_leaf_name(filename)
+    actual_extension = Path(safe_name).suffix
+    extension = actual_extension.lower()
+    if extension not in WEB_UPLOAD_FILE_EXTENSIONS or (extension == ".txt" and actual_extension != ".txt"):
+        raise HTTPException(status_code=400, detail="Only supported video files and .txt captions can be uploaded")
+    file_limit = WEB_MAX_CAPTION_BYTES if extension == ".txt" else WEB_MAX_UPLOAD_FILE_BYTES
+    content_length = request.headers.get("content-length")
+    declared_size: int | None = None
+    if content_length:
+        try:
+            declared_size = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+        if declared_size < 0 or declared_size > file_limit:
+            raise HTTPException(status_code=413, detail="The selected file exceeds the upload limit")
+
+    async with upload_lock:
+        session_dir = _upload_session_directory(session_id)
+        if (session_dir / WEB_UPLOAD_COMPLETE_MARKER).exists():
+            raise HTTPException(status_code=409, detail="This dataset upload is already complete")
+        if not (session_dir / WEB_UPLOAD_IN_PROGRESS_MARKER).is_file():
+            raise HTTPException(status_code=409, detail="This is not an active dataset upload session")
+        target = (session_dir / safe_name).resolve(strict=False)
+        resolved_session = session_dir.resolve(strict=True)
+        if not _path_within(target, resolved_session) or target.parent != resolved_session:
+            raise HTTPException(status_code=400, detail="Invalid upload target")
+        if target.is_symlink():
+            raise HTTPException(status_code=400, detail="Symbolic links are not valid upload targets")
+
+        root = _web_upload_root()
+        pending_sessions = _pending_upload_sessions(root)
+        global_pending_bytes = sum(_directory_bytes(candidate) for candidate in pending_sessions)
+        existing_total = _directory_bytes(session_dir)
+        replaced_bytes = target.stat().st_size if target.is_file() else 0
+        remaining_session = WEB_MAX_UPLOAD_SESSION_BYTES - (existing_total - replaced_bytes)
+        remaining_global = WEB_MAX_PENDING_UPLOAD_BYTES - (global_pending_bytes - replaced_bytes)
+        if declared_size is not None:
+            if declared_size > remaining_session or declared_size > remaining_global:
+                raise HTTPException(status_code=413, detail="The upload exceeds the configured size limit")
+            _ensure_upload_disk_space(session_dir, declared_size)
+        temporary = session_dir / f".{safe_name}.{uuid.uuid4().hex}.part"
+        received = 0
+        try:
+            with temporary.open("xb") as output:
+                async for chunk in request.stream():
+                    received += len(chunk)
+                    projected_session = existing_total - replaced_bytes + received
+                    projected_global = global_pending_bytes - replaced_bytes + received
+                    if (
+                        received > file_limit
+                        or projected_session > WEB_MAX_UPLOAD_SESSION_BYTES
+                        or projected_global > WEB_MAX_PENDING_UPLOAD_BYTES
+                    ):
+                        raise HTTPException(status_code=413, detail="The upload exceeds the configured size limit")
+                    if declared_size is None:
+                        # Streaming clients do not announce a final length. Check
+                        # immediately before every write so they cannot consume
+                        # the filesystem's configured emergency reserve.
+                        _ensure_upload_disk_space(session_dir, len(chunk))
+                    output.write(chunk)
+            if received <= 0:
+                raise HTTPException(status_code=400, detail="Empty files are not accepted")
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return {"name": safe_name, "size": received, "path": str(target.resolve(strict=True))}
+
+
+def _finalize_upload_session_locked(session_id: str):
+    session_dir = _upload_session_directory(session_id)
+    if (session_dir / WEB_UPLOAD_COMPLETE_MARKER).exists():
+        raise HTTPException(status_code=409, detail="This dataset upload is already complete")
+    if not (session_dir / WEB_UPLOAD_IN_PROGRESS_MARKER).is_file():
+        raise HTTPException(status_code=409, detail="This is not an active dataset upload session")
+    files = [path for path in session_dir.iterdir() if path.is_file() and not path.name.startswith(".")]
+    videos = [path for path in files if path.suffix.lower() in WEB_VIDEO_EXTENSIONS]
+    captions = [path for path in files if path.suffix.lower() == ".txt"]
+    # Linux dataset loading uses Path.with_suffix('.txt'), which is
+    # case-sensitive. Require the caption stem to match the video exactly.
+    video_stems = {path.stem: path.stem for path in videos}
+    caption_stems = {path.stem: path.stem for path in captions}
+    missing = sorted(video_stems[key] for key in video_stems.keys() - caption_stems.keys())
+    orphaned = sorted(caption_stems[key] for key in caption_stems.keys() - video_stems.keys())
+    if not videos:
+        raise HTTPException(status_code=400, detail="Upload at least one video and its matching .txt caption")
+    if missing or orphaned or len(video_stems) != len(videos) or len(caption_stems) != len(captions):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Every video must have exactly one same-name .txt caption",
+                "missingCaptions": missing,
+                "orphanCaptions": orphaned,
+            },
+        )
+    (session_dir / WEB_UPLOAD_COMPLETE_MARKER).write_text(
+        json.dumps({"completedAt": datetime.now().isoformat(timespec="seconds")}),
+        encoding="utf-8",
+    )
+    (session_dir / WEB_UPLOAD_IN_PROGRESS_MARKER).unlink(missing_ok=True)
+    return {
+        "path": str(session_dir.resolve(strict=True)),
+        "videoCount": len(videos),
+        "captionCount": len(captions),
+        "totalBytes": sum(path.stat().st_size for path in files),
+    }
+
+
+@app.post("/api/web-resources/upload/{session_id}/finalize")
+async def finalize_upload_session(session_id: str):
+    async with upload_lock:
+        return _finalize_upload_session_locked(session_id)
+
+
+def _cancel_upload_session_locked(session_id: str):
+    session_dir = _upload_session_directory(session_id)
+    if (session_dir / WEB_UPLOAD_COMPLETE_MARKER).exists():
+        raise HTTPException(status_code=409, detail="Completed datasets cannot be removed from the upload API")
+    if not (session_dir / WEB_UPLOAD_IN_PROGRESS_MARKER).is_file():
+        raise HTTPException(status_code=409, detail="This is not an active dataset upload session")
+    shutil.rmtree(session_dir)
+    return {"success": True}
+
+
+@app.delete("/api/web-resources/upload/{session_id}")
+async def cancel_upload_session(session_id: str):
+    async with upload_lock:
+        return _cancel_upload_session_locked(session_id)
+
+
+@app.post("/api/web-resources/model-downloads")
+async def start_model_download(payload: dict[str, Any]):
+    source = str(payload.get("source") or "").strip().lower()
+    if source not in {"huggingface", "modelscope"}:
+        raise HTTPException(status_code=400, detail="Source must be huggingface or modelscope")
+    repo_id = str(payload.get("repoId") or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}", repo_id) is None:
+        raise HTTPException(status_code=400, detail="Repository ID must use the owner/name form")
+    revision = str(payload.get("revision") or "").strip()
+    if (
+        not revision
+        or len(revision) > 200
+        or revision.startswith("/")
+        or ".." in PurePosixPath(revision).parts
+        or re.fullmatch(r"[A-Za-z0-9._/-]+", revision) is None
+    ):
+        raise HTTPException(status_code=400, detail="Invalid repository revision")
+    target_dir = _resolve_download_target(str(payload.get("targetDir") or ""))
+
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list) or not raw_files or len(raw_files) > 256:
+        raise HTTPException(status_code=400, detail="Provide between 1 and 256 repository files")
+    files: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for raw_item in raw_files:
+        item = {"path": raw_item} if isinstance(raw_item, str) else raw_item
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Invalid repository file entry")
+        relative_path = _safe_relative_repo_file(str(item.get("path") or ""))
+        try:
+            _download_file_path(target_dir, relative_path)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if relative_path.casefold() in seen_paths:
+            raise HTTPException(status_code=400, detail=f"Duplicate repository file: {relative_path}")
+        seen_paths.add(relative_path.casefold())
+        normalized: dict[str, Any] = {"path": relative_path}
+        if item.get("size") is not None:
+            try:
+                size = int(item["size"])
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid expected size for {relative_path}") from exc
+            if size <= 0:
+                raise HTTPException(status_code=400, detail=f"Invalid expected size for {relative_path}")
+            normalized["size"] = size
+        if item.get("sha256"):
+            sha256 = str(item["sha256"]).lower()
+            if re.fullmatch(r"[a-f0-9]{64}", sha256) is None:
+                raise HTTPException(status_code=400, detail=f"Invalid SHA-256 for {relative_path}")
+            normalized["sha256"] = sha256
+        if "size" not in normalized:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Each repository file requires its expected byte size: {relative_path}",
+            )
+        if item.get("field"):
+            field_name = str(item["field"])
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", field_name) is None:
+                raise HTTPException(status_code=400, detail=f"Invalid field mapping for {relative_path}")
+            normalized["field"] = field_name
+        files.append(normalized)
+
+    # Hashing an existing multi-GB artifact yields the event loop, so the
+    # overlap/parallel checks and job reservation must share one lock. Without
+    # it two tabs can both pass the checks and write the same target tree.
+    async with model_download_start_lock:
+        running = [job for job in model_download_jobs.values() if job.get("status") in {"queued", "running"}]
+        max_parallel = max(1, int(os.environ.get("DIFFPIPE_WEB_MAX_MODEL_DOWNLOADS", "2")))
+        if len(running) >= max_parallel:
+            raise HTTPException(status_code=409, detail="The maximum number of model download tasks is already running")
+        if any(
+            _path_within(Path(str(job.get("targetDir"))).resolve(strict=False), target_dir)
+            or _path_within(target_dir, Path(str(job.get("targetDir"))).resolve(strict=False))
+            for job in running
+        ):
+            raise HTTPException(status_code=409, detail="A download task is already using this target directory")
+
+        expected_total = sum(int(item["size"]) for item in files)
+        required = 0
+        for item in files:
+            existing_path = _download_file_path(target_dir, item["path"])
+            existing_valid = False
+            if existing_path.is_file() and item.get("sha256"):
+                try:
+                    await asyncio.to_thread(
+                        _verify_download,
+                        existing_path,
+                        item.get("size"),
+                        item.get("sha256"),
+                    )
+                    existing_valid = True
+                except RuntimeError:
+                    pass
+            if not existing_valid:
+                required += int(item["size"])
+        anchor = _nearest_existing_parent(target_dir)
+        if anchor is None:
+            raise HTTPException(status_code=400, detail="Download target has no existing parent")
+        free = shutil.disk_usage(anchor).free
+        reserve = int(os.environ.get("DIFFPIPE_WEB_DOWNLOAD_FREE_RESERVE_BYTES", str(1024**3)))
+        if free < required + reserve:
+            raise HTTPException(status_code=507, detail="Not enough free space for the requested model files")
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        public_job = {
+            "id": job_id,
+            "source": source,
+            "repoId": repo_id,
+            "revision": revision,
+            "targetDir": str(target_dir),
+            "status": "queued",
+            "totalFiles": len(files),
+            "completedFiles": 0,
+            "currentFile": None,
+            "currentFileIndex": 0,
+            "bytesDownloaded": _download_progress_bytes(target_dir, files),
+            "totalBytes": expected_total,
+            "pathMap": {},
+            "error": None,
+            "createdAt": now,
+            "updatedAt": now,
+            "resumable": True,
+        }
+        model_download_jobs[job_id] = public_job
+        spec = {
+            "source": source,
+            "repoId": repo_id,
+            "revision": revision,
+            "targetDir": str(target_dir),
+            "files": files,
+        }
+        task = asyncio.create_task(_run_model_download(job_id, spec))
+        model_download_tasks[job_id] = task
+        return public_job
+
+
+@app.get("/api/web-resources/model-downloads/{job_id}")
+def get_model_download(job_id: str):
+    if re.fullmatch(r"[a-f0-9]{32}", job_id) is None or job_id not in model_download_jobs:
+        raise HTTPException(status_code=404, detail="Model download task not found")
+    return model_download_jobs[job_id]
+
+
 @app.websocket("/ws/events")
 async def websocket_events(ws: WebSocket):
     await ws.accept()
@@ -415,8 +1594,18 @@ def get_file_url(file_path: str):
     return Path(file_path).resolve().as_uri()
 
 
+def _validate_toml_before_save(filename: str, content: str) -> None:
+    if Path(filename).name.casefold() != "trainconfig.toml":
+        return
+    parsed = tomllib.loads(content)
+    forbidden = {"output_base_dir"} & set(parsed)
+    if forbidden:
+        raise ValueError(f"UI-only fields cannot be written to trainconfig.toml: {', '.join(sorted(forbidden))}")
+
+
 @channel("save-file")
 def save_file(file_path: str, content: str):
+    _validate_toml_before_save(file_path, content)
     Path(file_path).parent.mkdir(parents=True, exist_ok=True)
     Path(file_path).write_text(content, encoding="utf-8")
     return True
@@ -634,7 +1823,9 @@ enable_ar_bucket = true
 def save_to_date_folder(payload: dict[str, Any]):
     folder = Path(get_today_output_folder(PROJECT_ROOT))
     file_path = folder / payload["filename"]
-    file_path.write_text(payload.get("content", ""), encoding="utf-8")
+    content = payload.get("content", "")
+    _validate_toml_before_save(str(file_path), content)
+    file_path.write_text(content, encoding="utf-8")
     return {"success": True, "path": str(file_path).replace("\\", "/"), "folder": str(folder).replace("\\", "/")}
 
 
@@ -868,7 +2059,14 @@ def get_training_status():
 def list_resume_checkpoints(config_path: str):
     if not config_path or not Path(config_path).is_file():
         raise ValueError("Missing or invalid configPath")
-    return list_training_checkpoints(config_path)
+    try:
+        return list_training_checkpoints(config_path)
+    except ValueError as exc:
+        # A newly-created project has no output_dir until the training page is
+        # saved. Treat that state as "no checkpoints yet" in the browser UI.
+        if "output_dir" in str(exc):
+            return {"outputDir": "", "checkpoints": []}
+        raise
 
 
 @channel("validate-resume-checkpoint")

@@ -1,4 +1,4 @@
-import { ipc } from '@/lib/ipc';
+import { ipc, isElectron } from '@/lib/ipc';
 import React, { useState, useEffect, useRef } from 'react';
 import { GlassCard } from './ui/GlassCard';
 import { GlassInput } from './ui/GlassInput';
@@ -9,6 +9,9 @@ import { useGlassToast } from './ui/GlassToast';
 import { Save, RotateCcw, Plus, Trash2, CheckCircle2, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { HelpIcon } from './ui/HelpIcon';
+import { WebDatasetUpload } from './WebDatasetUpload';
+import { WebPathPicker } from './ui/WebPathPicker';
+import { tomlPath, tomlString } from '@/lib/toml';
 
 interface DatasetConfigProps {
     mode?: 'training' | 'evaluation';
@@ -47,6 +50,8 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
     const [formData, setFormData] = useState(DEFAULT_CONFIG);
+    const [webPickerOpen, setWebPickerOpen] = useState(false);
+    const webPickCallbackRef = useRef<((path: string) => void) | null>(null);
 
     // Notify parent of path changes
     useEffect(() => {
@@ -260,6 +265,11 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
 
     const handlePickDir = async (callback: (path: string) => void) => {
+        if (!isElectron) {
+            webPickCallbackRef.current = callback;
+            setWebPickerOpen(true);
+            return;
+        }
         try {
             // @ts-ignore
             const result = await ipc.invoke('dialog:openFile', {
@@ -375,7 +385,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                 if (Number(formData.cache_shuffle_num) > 0) {
                     trainLines.push(`cache_shuffle_num = ${Number(formData.cache_shuffle_num)}`);
                     if (formData.cache_shuffle_delimiter && formData.cache_shuffle_delimiter !== ', ') {
-                        trainLines.push(`cache_shuffle_delimiter = '${formData.cache_shuffle_delimiter}'`);
+                        trainLines.push(`cache_shuffle_delimiter = ${tomlString(formData.cache_shuffle_delimiter)}`);
                     }
                 }
 
@@ -386,21 +396,20 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
 
                 // Main dataset
                 trainLines.push('\n[[directory]]');
-                const inputPath = formData.input_path.replace(/\\/g, '/');
-                trainLines.push(`path = '${inputPath}'`);
+                trainLines.push(`path = ${tomlPath(formData.input_path)}`);
                 trainLines.push(`num_repeats = ${Number(formData.num_repeats)}`);
 
                 // Add mask_path for main dataset if provided
                 if (formData.mask_path) {
-                    trainLines.push(`mask_path = '${formData.mask_path.replace(/\\/g, '/')}'`);
+                    trainLines.push(`mask_path = ${tomlPath(formData.mask_path)}`);
                 }
 
                 const validControlPaths = isEditingModel ? formData.control_paths.filter(p => p && p.trim() !== '') : [];
                 if (isEditingModel && validControlPaths.length > 0) {
                     if (validControlPaths.length === 1) {
-                        trainLines.push(`control_path = '${validControlPaths[0].replace(/\\/g, '/')}'`);
+                        trainLines.push(`control_path = ${tomlPath(validControlPaths[0])}`);
                     } else {
-                        const pathsArray = validControlPaths.map(p => `'${p.replace(/\\/g, '/')}'`).join(', ');
+                        const pathsArray = validControlPaths.map(tomlPath).join(', ');
                         trainLines.push(`control_path = [${pathsArray}]`);
                     }
                 }
@@ -408,29 +417,29 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                 // Additional training sets
                 for (const trainSet of formData.train_sets) {
                     trainLines.push('\n[[directory]]');
-                    trainLines.push(`path = '${trainSet.input_path.replace(/\\/g, '/')}'`);
+                    trainLines.push(`path = ${tomlPath(trainSet.input_path)}`);
                     trainLines.push(`num_repeats = ${Number(trainSet.num_repeats)}`);
 
                     // Add mask_path for additional training set if provided
                     if (trainSet.mask_path) {
-                        trainLines.push(`mask_path = '${trainSet.mask_path.replace(/\\/g, '/')}'`);
+                        trainLines.push(`mask_path = ${tomlPath(trainSet.mask_path)}`);
                     }
 
                     if (isEditingModel) {
                         const ctrlPaths = trainSet.control_paths.filter(p => p && p.trim() !== '');
                         if (ctrlPaths.length === 1) {
-                            trainLines.push(`control_path = '${ctrlPaths[0].replace(/\\/g, '/')}'`);
+                            trainLines.push(`control_path = ${tomlPath(ctrlPaths[0])}`);
                         } else if (ctrlPaths.length > 1) {
-                            const pathsArray = ctrlPaths.map(p => `'${p.replace(/\\/g, '/')}'`).join(', ');
+                            const pathsArray = ctrlPaths.map(tomlPath).join(', ');
                             trainLines.push(`control_path = [${pathsArray}]`);
                         }
                     }
                 }
 
-                const tomlString = trainLines.join('\n');
+                const tomlContent = trainLines.join('\n');
                 await ipc.invoke('save-to-date-folder', {
                     filename: 'dataset.toml',
-                    content: tomlString
+                    content: tomlContent
                 });
 
             } else {
@@ -448,14 +457,14 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                     const set = formData.eval_sets[i];
                     const evalLines = [baseContent];
                     evalLines.push('\n[[directory]]');
-                    evalLines.push(`path = '${set.path.replace(/\\/g, '/')}'`);
+                    evalLines.push(`path = ${tomlPath(set.path)}`);
                     evalLines.push(`num_repeats = 1`); // Evaluation usually repeats 1
 
                     const filename = i === 0 ? 'evaldataset.toml' : `evaldataset_${i}.toml`;
-                    const tomlString = evalLines.join('\n');
+                    const tomlContent = evalLines.join('\n');
                     await ipc.invoke('save-to-date-folder', {
                         filename,
-                        content: tomlString
+                        content: tomlContent
                     });
                 }
             }
@@ -524,6 +533,11 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                     }}
                 >
                     <div className="grid gap-6 md:grid-cols-2">
+                        {isTraining && !isElectron && (
+                            <WebDatasetUpload
+                                onUploaded={(path) => setFormData((previous) => ({ ...previous, input_path: path }))}
+                            />
+                        )}
                         {isTraining ? (
                             <div className="col-span-2 relative">
                                 <GlassInput
@@ -966,6 +980,20 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                 confirmText={t('common.confirm')}
                 cancelText={t('common.cancel')}
             />
+            {!isElectron && (
+                <WebPathPicker
+                    open={webPickerOpen}
+                    title={t('web_resources.select_dataset_directory')}
+                    mode="directory"
+                    allowCreate
+                    initialPath={formData.input_path}
+                    onClose={() => {
+                        setWebPickerOpen(false);
+                        webPickCallbackRef.current = null;
+                    }}
+                    onSelect={(path) => webPickCallbackRef.current?.(path)}
+                />
+            )}
         </div >
     );
 }
