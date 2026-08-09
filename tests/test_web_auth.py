@@ -25,6 +25,7 @@ class WebAuthTests(unittest.TestCase):
             web_server._web_auth_sessions.clear()
             web_server._web_auth_attempts_by_client.clear()
             web_server._web_auth_global_attempts.clear()
+        web_server.clients.clear()
         self.client = TestClient(web_server.app, base_url=self.origin)
 
     def tearDown(self):
@@ -223,6 +224,61 @@ class WebAuthTests(unittest.TestCase):
             headers={"Origin": self.origin, "Host": "cloud.example", "Cookie": cookie_header},
         ) as websocket:
             websocket.send_text("ping")
+
+    def test_broadcast_closes_revoked_session_without_sending_but_auth_off_still_sends(self):
+        class RecordingWebSocket:
+            def __init__(self):
+                self.sent: list[str] = []
+                self.closed: list[int] = []
+
+            async def send_text(self, payload):
+                self.sent.append(payload)
+
+            async def close(self, code):
+                self.closed.append(code)
+
+        revoked_socket = RecordingWebSocket()
+        token = web_server._issue_web_auth_session()
+        web_server.clients[revoked_socket] = token
+        web_server._revoke_web_auth_session(token)
+        asyncio.run(web_server.broadcast("training-log", "must-not-leak"))
+        self.assertEqual(revoked_socket.sent, [])
+        self.assertEqual(revoked_socket.closed, [4401])
+        self.assertNotIn(revoked_socket, web_server.clients)
+
+        open_socket = RecordingWebSocket()
+        web_server.clients[open_socket] = None
+        with mock.patch.object(web_server, "WEB_AUTH_MODE", "off"):
+            asyncio.run(web_server.broadcast("training-log", "allowed"))
+        self.assertEqual(len(open_socket.sent), 1)
+        self.assertIn("allowed", open_socket.sent[0])
+        self.assertEqual(open_socket.closed, [])
+
+    def test_logout_actively_closes_websocket_for_that_session(self):
+        self.assertEqual(self.login().status_code, 200)
+        session_cookie = self.client.cookies.get(web_server.WEB_AUTH_COOKIE_NAME)
+        cookie_header = f"{web_server.WEB_AUTH_COOKIE_NAME}={session_cookie}"
+        with self.client.websocket_connect(
+            "/ws/events",
+            headers={"Origin": self.origin, "Host": "cloud.example", "Cookie": cookie_header},
+        ) as websocket:
+            logout = self.client.post("/auth/logout", headers={"Origin": self.origin})
+            self.assertEqual(logout.status_code, 200, logout.text)
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                websocket.receive_text()
+            self.assertEqual(closed.exception.code, 4401)
+
+    def test_websocket_closes_when_signed_session_expires(self):
+        with mock.patch.object(web_server, "WEB_AUTH_SESSION_SECONDS", 1):
+            token = web_server._issue_web_auth_session()
+            cookie_header = f"{web_server.WEB_AUTH_COOKIE_NAME}={token}"
+            with self.client.websocket_connect(
+                "/ws/events",
+                headers={"Origin": self.origin, "Host": "cloud.example", "Cookie": cookie_header},
+            ) as websocket:
+                with self.assertRaises(WebSocketDisconnect) as closed:
+                    websocket.receive_text()
+                self.assertEqual(closed.exception.code, 4401)
 
     def test_tampered_and_expired_sessions_are_rejected(self):
         token = web_server._issue_web_auth_session(now=1_000)

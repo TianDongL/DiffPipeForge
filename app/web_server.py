@@ -663,11 +663,29 @@ async def web_auth_login(request: Request):
     return response
 
 
+async def _close_websockets_for_token(token: str | None, code: int = 4401) -> None:
+    if not token:
+        return
+    matching = [
+        ws
+        for ws, connection_token in list(clients.items())
+        if connection_token is not None and hmac.compare_digest(connection_token, token)
+    ]
+    for ws in matching:
+        clients.pop(ws, None)
+        try:
+            await ws.close(code=code)
+        except Exception:
+            pass
+
+
 @app.post("/auth/logout")
-def web_auth_logout(request: Request):
+async def web_auth_logout(request: Request):
     if not _web_auth_enabled():
         raise HTTPException(status_code=404, detail="Not found")
-    _revoke_web_auth_session(request.cookies.get(WEB_AUTH_COOKIE_NAME))
+    token = request.cookies.get(WEB_AUTH_COOKIE_NAME)
+    _revoke_web_auth_session(token)
+    await _close_websockets_for_token(token)
     response = JSONResponse({"ok": True})
     response.headers["Cache-Control"] = "no-store"
     response.delete_cookie(
@@ -680,7 +698,7 @@ def web_auth_logout(request: Request):
     return response
 
 handlers: dict[str, Callable[..., Any]] = {}
-clients: set[WebSocket] = set()
+clients: dict[WebSocket, str | None] = {}
 
 active_backend_process: asyncio.subprocess.Process | None = None
 active_tensorboard_process: asyncio.subprocess.Process | None = None
@@ -1606,13 +1624,20 @@ async def broadcast(channel_name: str, *args: Any) -> None:
         return
     payload = json.dumps({"channel": channel_name, "args": list(args)}, ensure_ascii=False)
     dead: list[WebSocket] = []
-    for ws in list(clients):
+    for ws, token in list(clients.items()):
+        if _web_auth_enabled() and _web_auth_session_details(token) is None:
+            dead.append(ws)
+            try:
+                await ws.close(code=4401)
+            except Exception:
+                pass
+            continue
         try:
             await ws.send_text(payload)
         except Exception:
             dead.append(ws)
     for ws in dead:
-        clients.discard(ws)
+        clients.pop(ws, None)
 
 
 async def read_stream_lines(stream: asyncio.StreamReader | None, on_line: Callable[[str], Any]) -> None:
@@ -2182,20 +2207,39 @@ def get_model_download(job_id: str):
 
 @app.websocket("/ws/events")
 async def websocket_events(ws: WebSocket):
+    auth_token: str | None = None
     if _web_auth_enabled():
-        if _web_auth_session_details(ws.cookies.get(WEB_AUTH_COOKIE_NAME)) is None:
+        auth_token = ws.cookies.get(WEB_AUTH_COOKIE_NAME)
+        if _web_auth_session_details(auth_token) is None:
             await ws.close(code=4401)
             return
         if not _origin_matches_host(ws.headers):
             await ws.close(code=4403)
             return
     await ws.accept()
-    clients.add(ws)
+    clients[ws] = auth_token
     try:
         while True:
-            await ws.receive_text()
+            if auth_token is None:
+                await ws.receive_text()
+                continue
+            session = _web_auth_session_details(auth_token)
+            if session is None:
+                await ws.close(code=4401)
+                return
+            remaining = session[1] - time.time()
+            if remaining <= 0:
+                await ws.close(code=4401)
+                return
+            try:
+                await asyncio.wait_for(ws.receive_text(), timeout=remaining)
+            except TimeoutError:
+                await ws.close(code=4401)
+                return
     except WebSocketDisconnect:
-        clients.discard(ws)
+        pass
+    finally:
+        clients.pop(ws, None)
 
 
 @channel("window-minimize")
