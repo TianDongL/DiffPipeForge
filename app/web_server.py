@@ -3,15 +3,20 @@ import asyncio
 import base64
 from collections import deque
 import hashlib
+import hmac
+import importlib
 import json
 import mimetypes
 import os
 import platform
 import re
+import secrets
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import traceback
 import uuid
@@ -19,6 +24,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 try:
     import tomllib
@@ -27,7 +33,7 @@ except ImportError:  # pragma: no cover
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 try:
@@ -42,6 +48,513 @@ SETTINGS_FILE = PROJECT_ROOT / "settings.json"
 RECENT_PROJECTS_FILE = PROJECT_ROOT / "settings_web_recent_projects.json"
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+WEB_AUTH_MODE = os.environ.get("DIFFPIPE_WEB_AUTH", "off").strip().casefold()
+WEB_AUTH_COOKIE_NAME = "diffpipe_session"
+WEB_AUTH_LOGIN_MAX_BODY_BYTES = 8192
+WEB_AUTH_LOGIN_BODY_TIMEOUT_SECONDS = 8.0
+WEB_AUTH_SESSION_SECONDS = int(os.environ.get("DIFFPIPE_WEB_AUTH_SESSION_SECONDS", str(12 * 60 * 60)))
+WEB_AUTH_LOGIN_WINDOW_SECONDS = int(os.environ.get("DIFFPIPE_WEB_AUTH_LOGIN_WINDOW_SECONDS", "60"))
+WEB_AUTH_LOGIN_MAX_ATTEMPTS = int(os.environ.get("DIFFPIPE_WEB_AUTH_LOGIN_MAX_ATTEMPTS", "5"))
+WEB_AUTH_LOGIN_GLOBAL_MAX_ATTEMPTS = int(
+    os.environ.get("DIFFPIPE_WEB_AUTH_LOGIN_GLOBAL_MAX_ATTEMPTS", "10")
+)
+WEB_AUTH_MAX_SESSIONS = int(os.environ.get("DIFFPIPE_WEB_AUTH_MAX_SESSIONS", "64"))
+WEB_AUTH_YOUYUN_TIMEOUT_SECONDS = float(os.environ.get("DIFFPIPE_WEB_AUTH_YOUYUN_TIMEOUT_SECONDS", "15"))
+
+if WEB_AUTH_MODE not in {"off", "system", "youyun"}:
+    raise RuntimeError("DIFFPIPE_WEB_AUTH must be 'off', 'system', or 'youyun'")
+if WEB_AUTH_SESSION_SECONDS < 60 or WEB_AUTH_SESSION_SECONDS > 7 * 24 * 60 * 60:
+    raise RuntimeError("DIFFPIPE_WEB_AUTH_SESSION_SECONDS must be between 60 and 604800")
+if WEB_AUTH_LOGIN_WINDOW_SECONDS < 1:
+    raise RuntimeError("DIFFPIPE_WEB_AUTH_LOGIN_WINDOW_SECONDS must be positive")
+if WEB_AUTH_LOGIN_MAX_ATTEMPTS < 1 or WEB_AUTH_LOGIN_GLOBAL_MAX_ATTEMPTS < 1:
+    raise RuntimeError("Web login attempt limits must be positive")
+if WEB_AUTH_MAX_SESSIONS < 1:
+    raise RuntimeError("DIFFPIPE_WEB_AUTH_MAX_SESSIONS must be positive")
+if WEB_AUTH_YOUYUN_TIMEOUT_SECONDS < 5 or WEB_AUTH_YOUYUN_TIMEOUT_SECONDS > 30:
+    raise RuntimeError("DIFFPIPE_WEB_AUTH_YOUYUN_TIMEOUT_SECONDS must be between 5 and 30")
+
+_web_auth_secret = secrets.token_bytes(32)
+_web_auth_state_lock = threading.Lock()
+_web_auth_sessions: dict[str, int] = {}
+_web_auth_attempts_by_client: dict[str, deque[float]] = {}
+_web_auth_global_attempts: deque[float] = deque()
+_youyun_auth_slots = threading.BoundedSemaphore(2)
+_system_password_hash: str | None = None
+_system_crypt: Any = None
+_youyun_hostname: str | None = None
+_youyun_ssh_host_public_key: str | None = None
+
+
+def _load_system_password_auth() -> tuple[str, Any]:
+    if os.name != "posix" or platform.system() != "Linux":
+        raise RuntimeError("DIFFPIPE_WEB_AUTH=system requires a Linux host")
+    try:
+        crypt_module = importlib.import_module("crypt")
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "DIFFPIPE_WEB_AUTH=system requires Python crypt support backed by the system libcrypt"
+        ) from exc
+
+    try:
+        shadow_lines = Path("/etc/shadow").read_text(encoding="utf-8", errors="strict").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(
+            "DIFFPIPE_WEB_AUTH=system must run with permission to read /etc/shadow"
+        ) from exc
+
+    password_hash = next(
+        (line.split(":", 2)[1] for line in shadow_lines if line.startswith("root:")),
+        None,
+    )
+    if not password_hash or password_hash.startswith(("!", "*")):
+        raise RuntimeError(
+            "DIFFPIPE_WEB_AUTH=system requires the Linux root account to have an active password"
+        )
+    try:
+        probe = crypt_module.crypt("diffpipe-auth-support-check", password_hash)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("The Linux root password hash is not supported by system libcrypt") from exc
+    if not probe or probe.startswith("*0"):
+        raise RuntimeError("The Linux root password hash is not supported by system libcrypt")
+    return password_hash, crypt_module
+
+
+if WEB_AUTH_MODE == "system":
+    _system_password_hash, _system_crypt = _load_system_password_auth()
+elif WEB_AUTH_MODE == "youyun":
+    _youyun_hostname = socket.gethostname()
+    if re.fullmatch(r"cpod-[a-z0-9]+", _youyun_hostname) is None:
+        raise RuntimeError(
+            "DIFFPIPE_WEB_AUTH=youyun requires a platform hostname matching cpod-[a-z0-9]+"
+        )
+    for executable in (Path("/usr/bin/ssh"), Path("/usr/bin/setsid")):
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError(f"DIFFPIPE_WEB_AUTH=youyun requires {executable}")
+    try:
+        public_key_fields = Path("/etc/ssh/ssh_host_ed25519_key.pub").read_text(
+            encoding="ascii",
+            errors="strict",
+        ).split()
+        if len(public_key_fields) < 2 or public_key_fields[0] != "ssh-ed25519":
+            raise ValueError("not an Ed25519 host key")
+        base64.b64decode(public_key_fields[1], validate=True)
+        _youyun_ssh_host_public_key = f"{public_key_fields[0]} {public_key_fields[1]}"
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise RuntimeError(
+            "DIFFPIPE_WEB_AUTH=youyun requires a readable Ed25519 OpenSSH host public key"
+        ) from exc
+
+
+def _web_auth_enabled() -> bool:
+    return WEB_AUTH_MODE in {"system", "youyun"}
+
+
+def _verify_system_password(password: str) -> bool:
+    if not _system_password_hash or _system_crypt is None:
+        return False
+    try:
+        candidate = _system_crypt.crypt(password, _system_password_hash)
+    except (OSError, ValueError):
+        return False
+    return bool(candidate) and hmac.compare_digest(candidate, _system_password_hash)
+
+
+def _verify_youyun_ssh_credentials(ssh_port: Any, password: str) -> bool:
+    hostname = _youyun_hostname
+    host_public_key = _youyun_ssh_host_public_key
+    if (
+        hostname is None
+        or re.fullmatch(r"cpod-[a-z0-9]+", hostname) is None
+        or not host_public_key
+    ):
+        return False
+    if isinstance(ssh_port, bool) or not isinstance(ssh_port, (int, str)):
+        return False
+    port_raw = str(ssh_port)
+    if re.fullmatch(r"[0-9]{1,5}", port_raw) is None:
+        return False
+    port = int(port_raw)
+    if port < 1 or port > 65535:
+        return False
+    if not isinstance(password, str) or not password:
+        return False
+    try:
+        if len(password.encode("utf-8")) > 4096:
+            return False
+    except UnicodeError:
+        return False
+    if not _youyun_auth_slots.acquire(blocking=False):
+        return False
+
+    target = f"{hostname}.podtcp.compshare.cn"
+    try:
+        with tempfile.TemporaryDirectory(prefix="diffpipe-web-auth-") as temp_dir_raw:
+            temp_dir = Path(temp_dir_raw)
+            os.chmod(temp_dir, 0o700)
+            known_hosts = temp_dir / "known_hosts"
+            askpass = temp_dir / "askpass.sh"
+            known_hosts.write_text(
+                f"[{target}]:{port} {host_public_key}\n",
+                encoding="ascii",
+            )
+            askpass.write_text(
+                '#!/bin/sh\nprintf %s "$DIFFPIPE_SSH_PASSWORD"\n',
+                encoding="ascii",
+            )
+            os.chmod(known_hosts, 0o600)
+            os.chmod(askpass, 0o700)
+            command = [
+                "/usr/bin/setsid",
+                "--wait",
+                "/usr/bin/ssh",
+                "-F",
+                "/dev/null",
+                "-o",
+                f"UserKnownHostsFile={known_hosts}",
+                "-o",
+                "GlobalKnownHostsFile=/dev/null",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                "BatchMode=no",
+                "-o",
+                "PreferredAuthentications=password",
+                "-o",
+                "PasswordAuthentication=yes",
+                "-o",
+                "PubkeyAuthentication=no",
+                "-o",
+                "KbdInteractiveAuthentication=no",
+                "-o",
+                "HostKeyAlgorithms=ssh-ed25519",
+                "-o",
+                "UpdateHostKeys=no",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "ConnectionAttempts=1",
+                "-o",
+                "LogLevel=ERROR",
+                "-p",
+                str(port),
+                f"root@{target}",
+                "true",
+            ]
+            child_env = {
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C",
+                "DISPLAY": "diffpipe-auth:0",
+                "SSH_ASKPASS": str(askpass),
+                "SSH_ASKPASS_REQUIRE": "force",
+                "DIFFPIPE_SSH_PASSWORD": password,
+            }
+            result = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=child_env,
+                timeout=WEB_AUTH_YOUYUN_TIMEOUT_SECONDS,
+                check=False,
+            )
+            return result.returncode == 0
+    except Exception:
+        # Authentication fails closed. In particular, never propagate an SSH
+        # exception whose text could contain environment or connection data.
+        return False
+    finally:
+        _youyun_auth_slots.release()
+
+
+def _verify_web_auth_credentials(payload: dict[str, Any]) -> bool:
+    if WEB_AUTH_MODE == "system":
+        credential = payload.get("credential")
+        return isinstance(credential, str) and _verify_system_password(credential)
+    if WEB_AUTH_MODE == "youyun":
+        password = payload.get("password")
+        return isinstance(password, str) and _verify_youyun_ssh_credentials(
+            payload.get("ssh_port"),
+            password,
+        )
+    return False
+
+
+def _prune_web_auth_sessions(now: int) -> None:
+    expired = [nonce for nonce, expires_at in _web_auth_sessions.items() if expires_at <= now]
+    for nonce in expired:
+        _web_auth_sessions.pop(nonce, None)
+
+
+def _issue_web_auth_session(now: int | None = None) -> str:
+    issued_at = int(time.time()) if now is None else now
+    expires_at = issued_at + WEB_AUTH_SESSION_SECONDS
+    nonce = secrets.token_urlsafe(24)
+    payload = f"v1.{expires_at}.{nonce}"
+    signature = hmac.new(_web_auth_secret, payload.encode("ascii"), hashlib.sha256).hexdigest()
+    with _web_auth_state_lock:
+        _prune_web_auth_sessions(issued_at)
+        while len(_web_auth_sessions) >= WEB_AUTH_MAX_SESSIONS:
+            oldest = min(_web_auth_sessions, key=_web_auth_sessions.get)  # type: ignore[arg-type]
+            _web_auth_sessions.pop(oldest, None)
+        _web_auth_sessions[nonce] = expires_at
+    return f"{payload}.{signature}"
+
+
+def _web_auth_session_details(token: str | None, now: int | None = None) -> tuple[str, int] | None:
+    if not token or len(token) > 512:
+        return None
+    parts = token.split(".")
+    if len(parts) != 4 or parts[0] != "v1":
+        return None
+    _, expires_raw, nonce, signature = parts
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", nonce):
+        return None
+    if not re.fullmatch(r"[a-f0-9]{64}", signature):
+        return None
+    try:
+        expires_at = int(expires_raw)
+    except ValueError:
+        return None
+    current = int(time.time()) if now is None else now
+    if expires_at <= current:
+        return None
+    payload = f"v1.{expires_at}.{nonce}"
+    expected = hmac.new(_web_auth_secret, payload.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    with _web_auth_state_lock:
+        _prune_web_auth_sessions(current)
+        if _web_auth_sessions.get(nonce) != expires_at:
+            return None
+    return nonce, expires_at
+
+
+def _revoke_web_auth_session(token: str | None) -> None:
+    details = _web_auth_session_details(token)
+    if details is None:
+        return
+    with _web_auth_state_lock:
+        _web_auth_sessions.pop(details[0], None)
+
+
+def _canonical_authority(value: str) -> tuple[str, int | None] | None:
+    try:
+        parsed = urlsplit(f"//{value.strip()}")
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if not hostname or parsed.username or parsed.password:
+        return None
+    return hostname.rstrip(".").casefold(), port
+
+
+def _origin_matches_host(headers: Any) -> bool:
+    origin = str(headers.get("origin") or "").strip()
+    try:
+        parsed_origin = urlsplit(origin)
+        origin_authority = _canonical_authority(parsed_origin.netloc)
+    except ValueError:
+        return False
+    if parsed_origin.scheme not in {"http", "https"} or origin_authority is None:
+        return False
+    if parsed_origin.path not in {"", "/"} or parsed_origin.query or parsed_origin.fragment:
+        return False
+
+    candidates: set[tuple[str, int | None]] = set()
+    for header_name in ("host", "x-forwarded-host"):
+        raw = str(headers.get(header_name) or "")
+        for value in raw.split(","):
+            authority = _canonical_authority(value)
+            if authority is not None:
+                candidates.add(authority)
+    if origin_authority in candidates:
+        return True
+
+    # A trusted TLS proxy commonly forwards an HTTPS origin to an HTTP
+    # application and may add or remove the default port.
+    origin_host, origin_port = origin_authority
+    normalized_origin_port = origin_port or (443 if parsed_origin.scheme == "https" else 80)
+    for candidate_host, candidate_port in candidates:
+        if candidate_host != origin_host:
+            continue
+        if candidate_port is None or candidate_port == normalized_origin_port:
+            return True
+    return False
+
+
+def _consume_login_attempt(client_key: str, now: float | None = None) -> int | None:
+    current = time.monotonic() if now is None else now
+    cutoff = current - WEB_AUTH_LOGIN_WINDOW_SECONDS
+    with _web_auth_state_lock:
+        while _web_auth_global_attempts and _web_auth_global_attempts[0] <= cutoff:
+            _web_auth_global_attempts.popleft()
+        attempts = _web_auth_attempts_by_client.setdefault(client_key, deque())
+        while attempts and attempts[0] <= cutoff:
+            attempts.popleft()
+        if (
+            len(attempts) >= WEB_AUTH_LOGIN_MAX_ATTEMPTS
+            or len(_web_auth_global_attempts) >= WEB_AUTH_LOGIN_GLOBAL_MAX_ATTEMPTS
+        ):
+            waits: list[float] = []
+            if len(attempts) >= WEB_AUTH_LOGIN_MAX_ATTEMPTS:
+                waits.append(attempts[0] + WEB_AUTH_LOGIN_WINDOW_SECONDS - current)
+            if len(_web_auth_global_attempts) >= WEB_AUTH_LOGIN_GLOBAL_MAX_ATTEMPTS:
+                waits.append(_web_auth_global_attempts[0] + WEB_AUTH_LOGIN_WINDOW_SECONDS - current)
+            return max(1, int(max(waits, default=1)) + 1)
+        attempts.append(current)
+        _web_auth_global_attempts.append(current)
+        if len(_web_auth_attempts_by_client) > 1024:
+            for key in list(_web_auth_attempts_by_client):
+                if not _web_auth_attempts_by_client[key]:
+                    _web_auth_attempts_by_client.pop(key, None)
+        return None
+
+
+WEB_AUTH_LOGIN_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DiffPipe Forge</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090b10;color:#f7f7f8}
+    main{width:min(92vw,430px);padding:34px;border:1px solid #2b303b;border-radius:18px;background:#12151c;box-shadow:0 24px 70px #0008}
+    h1{margin:0 0 8px;font-size:25px}p{margin:0 0 24px;color:#aeb5c2;line-height:1.55}
+    label{display:block;margin:14px 0 8px;font-size:14px}input,button{width:100%;height:46px;border-radius:10px;font:inherit}
+    input{border:1px solid #39404d;background:#090b10;color:#fff;padding:0 13px;outline:none}input:focus{border-color:#738cff;box-shadow:0 0 0 3px #5269ff33}
+    button{margin-top:14px;border:0;background:#6377f2;color:#fff;font-weight:700;cursor:pointer}button:disabled{opacity:.55;cursor:wait}
+    #message{min-height:22px;margin:13px 0 0;color:#ff9c9c;font-size:13px}
+    small{display:block;margin-top:20px;color:#747d8d}
+  </style>
+</head>
+<body><main>
+  <h1>DiffPipe Forge</h1>
+  <p>__AUTH_INTRO__</p>
+  <form id="login">__AUTH_FIELDS__
+    <button id="submit" type="submit">登录 / Sign in</button><div id="message" role="alert" aria-live="polite"></div>
+  </form><small>__AUTH_HELP__</small>
+</main><script>
+const form=document.getElementById('login'),button=document.getElementById('submit'),message=document.getElementById('message');
+form.addEventListener('submit',async(event)=>{event.preventDefault();button.disabled=true;message.textContent='';
+try{const response=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(Object.fromEntries(new FormData(form).entries()))});
+if(response.ok){location.replace('/');return;}const data=await response.json().catch(()=>({}));message.textContent=data.detail||'登录失败 / Sign-in failed';}
+catch(_error){message.textContent='网络连接失败，请重试 / Network error, please retry';}finally{button.disabled=false;}});
+</script></body></html>"""
+
+
+def _login_page_response() -> HTMLResponse:
+    if WEB_AUTH_MODE == "youyun":
+        intro = (
+            "请从当前实例卡片复制 SSH 端口和实例密码。这里只用于验证身份，不需要打开终端。"
+            "<br>Copy the SSH port and instance password from this instance card. No terminal is needed."
+        )
+        fields = (
+            '<label for="ssh_port">SSH 端口 / SSH port</label>'
+            '<input id="ssh_port" name="ssh_port" type="text" inputmode="numeric" pattern="[0-9]{1,5}" '
+            'maxlength="5" autocomplete="off" required autofocus>'
+            '<label for="password">实例密码 / Instance password</label>'
+            '<input id="password" name="password" type="password" autocomplete="current-password" '
+            'maxlength="1024" required>'
+        )
+        help_text = (
+            "端口和密码只用于本次登录校验，不会写入项目或日志。 / These values are not written to projects or logs."
+        )
+    else:
+        intro = "请输入算力实例密码以进入训练界面。<br>Enter the compute instance password to continue."
+        fields = (
+            '<label for="credential">实例密码 / Instance password</label>'
+            '<input id="credential" name="credential" type="password" autocomplete="current-password" '
+            'maxlength="1024" required autofocus>'
+        )
+        help_text = "会话仅保存在当前浏览器中。 / The session stays in this browser."
+    html = (
+        WEB_AUTH_LOGIN_HTML.replace("__AUTH_INTRO__", intro)
+        .replace("__AUTH_FIELDS__", fields)
+        .replace("__AUTH_HELP__", help_text)
+    )
+    response = HTMLResponse(html, status_code=200)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+        "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _auth_error(status_code: int, detail: str, *, retry_after: int | None = None) -> JSONResponse:
+    response = JSONResponse({"detail": detail}, status_code=status_code)
+    response.headers["Cache-Control"] = "no-store"
+    if retry_after is not None:
+        response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
+class _LoginBodyTooLarge(Exception):
+    pass
+
+
+async def _read_login_payload(request: Request) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    content_type = str(request.headers.get("content-type") or "")
+    media_type, _, parameters = content_type.partition(";")
+    if media_type.strip().casefold() != "application/json":
+        return None, _auth_error(415, "登录请求必须使用 application/json / Login requires application/json")
+    if parameters:
+        charset_values = [
+            item.split("=", 1)[1].strip().strip('"').casefold()
+            for item in parameters.split(";")
+            if item.strip().casefold().startswith("charset=")
+        ]
+        if any(value not in {"utf-8", "utf8"} for value in charset_values):
+            return None, _auth_error(415, "登录请求必须使用 UTF-8 JSON / Login requires UTF-8 JSON")
+    if "content-encoding" in request.headers:
+        return None, _auth_error(415, "登录请求不支持内容编码 / Content encoding is not supported")
+
+    declared_length_raw = request.headers.get("content-length")
+    if declared_length_raw is not None:
+        declared_length_raw = declared_length_raw.strip()
+        if re.fullmatch(r"[0-9]+", declared_length_raw) is None:
+            return None, _auth_error(400, "登录请求格式无效 / Invalid login request")
+        normalized_length = declared_length_raw.lstrip("0") or "0"
+        limit_raw = str(WEB_AUTH_LOGIN_MAX_BODY_BYTES)
+        if len(normalized_length) > len(limit_raw) or (
+            len(normalized_length) == len(limit_raw) and normalized_length > limit_raw
+        ):
+            return None, _auth_error(413, "登录请求过大 / Login request is too large")
+
+    async def collect() -> bytes:
+        body = bytearray()
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            if len(body) + len(chunk) > WEB_AUTH_LOGIN_MAX_BODY_BYTES:
+                raise _LoginBodyTooLarge
+            body.extend(chunk)
+        return bytes(body)
+
+    try:
+        raw_body = await asyncio.wait_for(collect(), timeout=WEB_AUTH_LOGIN_BODY_TIMEOUT_SECONDS)
+    except _LoginBodyTooLarge:
+        return None, _auth_error(413, "登录请求过大 / Login request is too large")
+    except TimeoutError:
+        return None, _auth_error(408, "登录请求读取超时 / Login request timed out")
+    except Exception:
+        return None, _auth_error(400, "登录请求格式无效 / Invalid login request")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8", errors="strict"))
+    except (UnicodeError, ValueError, RecursionError):
+        return None, _auth_error(400, "登录请求必须是有效 JSON / Login request must be valid JSON")
+    if not isinstance(payload, dict):
+        return None, _auth_error(400, "登录请求必须是 JSON 对象 / Login request must be a JSON object")
+    return payload, None
 
 app = FastAPI(title="DiffPipe Forge WebUI")
 web_cors_origins = [
@@ -59,6 +572,112 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def web_auth_middleware(request: Request, call_next: Callable[..., Any]):
+    if not _web_auth_enabled():
+        return await call_next(request)
+
+    path = request.url.path
+    method = request.method.upper()
+    if path == "/healthz" and method in {"GET", "HEAD"}:
+        return await call_next(request)
+    if path == "/auth/login" and method == "POST":
+        if not _origin_matches_host(request.headers):
+            return _auth_error(403, "请求来源无效 / Invalid request origin")
+        return await call_next(request)
+    if path == "/auth/logout" and method == "POST":
+        if not _origin_matches_host(request.headers):
+            return _auth_error(403, "请求来源无效 / Invalid request origin")
+        return await call_next(request)
+
+    token = request.cookies.get(WEB_AUTH_COOKIE_NAME)
+    if _web_auth_session_details(token) is None:
+        if path == "/" and method == "GET":
+            return _login_page_response()
+        return _auth_error(401, "请先登录 / Authentication required")
+
+    if method not in {"GET", "HEAD", "OPTIONS"} and not _origin_matches_host(request.headers):
+        return _auth_error(403, "请求来源无效 / Invalid request origin")
+    return await call_next(request)
+
+
+@app.get("/healthz")
+def web_healthcheck():
+    return {"status": "ok"}
+
+
+@app.post("/auth/login")
+async def web_auth_login(request: Request):
+    if not _web_auth_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    client_key = request.client.host if request.client is not None else "unknown"
+    retry_after = _consume_login_attempt(client_key)
+    if retry_after is not None:
+        return _auth_error(
+            429,
+            "尝试次数过多，请稍后再试 / Too many attempts, please try again later",
+            retry_after=retry_after,
+        )
+
+    payload, body_error = await _read_login_payload(request)
+    if body_error is not None:
+        return body_error
+    if payload is None:  # Defensive; _read_login_payload returns one side of the tuple.
+        return _auth_error(400, "登录请求格式无效 / Invalid login request")
+    secret = payload.get("password" if WEB_AUTH_MODE == "youyun" else "credential")
+    if not isinstance(secret, str) or not secret:
+        payload.clear()
+        return _auth_error(401, "登录凭据不正确 / Incorrect sign-in credential")
+    try:
+        secret_too_large = len(secret.encode("utf-8")) > 4096
+    except UnicodeError:
+        secret_too_large = True
+    if secret_too_large:
+        payload.clear()
+        return _auth_error(401, "登录凭据不正确 / Incorrect sign-in credential")
+    try:
+        authenticated = await asyncio.to_thread(_verify_web_auth_credentials, payload)
+    except Exception:
+        authenticated = False
+    finally:
+        secret = ""
+        payload.clear()
+    if not authenticated:
+        return _auth_error(401, "登录凭据不正确 / Incorrect sign-in credential")
+
+    token = _issue_web_auth_session()
+    response = JSONResponse({"ok": True})
+    response.headers["Cache-Control"] = "no-store"
+    response.set_cookie(
+        WEB_AUTH_COOKIE_NAME,
+        token,
+        max_age=WEB_AUTH_SESSION_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/auth/logout")
+def web_auth_logout(request: Request):
+    if not _web_auth_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    _revoke_web_auth_session(request.cookies.get(WEB_AUTH_COOKIE_NAME))
+    response = JSONResponse({"ok": True})
+    response.headers["Cache-Control"] = "no-store"
+    response.delete_cookie(
+        WEB_AUTH_COOKIE_NAME,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
 
 handlers: dict[str, Callable[..., Any]] = {}
 clients: set[WebSocket] = set()
@@ -1563,6 +2182,13 @@ def get_model_download(job_id: str):
 
 @app.websocket("/ws/events")
 async def websocket_events(ws: WebSocket):
+    if _web_auth_enabled():
+        if _web_auth_session_details(ws.cookies.get(WEB_AUTH_COOKIE_NAME)) is None:
+            await ws.close(code=4401)
+            return
+        if not _origin_matches_host(ws.headers):
+            await ws.close(code=4403)
+            return
     await ws.accept()
     clients.add(ws)
     try:
