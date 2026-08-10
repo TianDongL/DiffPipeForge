@@ -1,5 +1,5 @@
 import { ipc } from '@/lib/ipc';
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Sidebar } from "./Sidebar";
 import { DatasetConfig } from './DatasetConfig';
 import { ModelTrainingPage } from "./ModelTrainingPage";
@@ -37,6 +37,7 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
     const [trainPath, setTrainPath] = useState('');
     const [evalPaths, setEvalPaths] = useState<string[]>([]);
     const [evalSets, setEvalSets] = useState<{ name: string, path: string }[]>([]);
+    const [configRevision, setConfigRevision] = useState(0);
     const [isPathConflictDialogOpen, setIsPathConflictDialogOpen] = useState(false);
     const [isRenaming, setIsRenaming] = useState(false);
     const [newName, setNewName] = useState('');
@@ -50,6 +51,10 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
     });
     const [isEnvDropdownOpen, setIsEnvDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+
+    const handleConfigSaved = useCallback(() => {
+        setConfigRevision((revision) => revision + 1);
+    }, []);
 
     // Track loaded project to prevent double-loading in StrictMode
     const lastLoadedPathRef = useRef<string | null>(null);
@@ -535,6 +540,7 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
                                 modelType={currentModelType}
                                 modelVersion={currentModelVersion}
                                 onPathsChange={(paths) => setTrainPath(paths[0] || '')}
+                                onConfigSaved={handleConfigSaved}
                             />
                         </div>
                         <div style={{ display: activeTab === 'eval_dataset' ? 'block' : 'none' }}>
@@ -555,11 +561,13 @@ export default function AppLayout({ onBackToHome, projectPath, onProjectRenamed 
                                 setGlobalModelVersion={setCurrentModelVersion}
                                 evalSets={evalSets}
                                 projectPath={projectPath}
+                                onConfigSaved={handleConfigSaved}
                             />
                         </div>
                         <div style={{ display: activeTab === 'training_run' ? 'block' : 'none' }}>
                             <TrainingLauncherPage
                                 projectPath={projectPath}
+                                configRevision={configRevision}
                             />
                         </div>
                         <div style={{ display: activeTab === 'monitor' ? 'block' : 'none' }}>

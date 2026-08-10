@@ -20,6 +20,7 @@ interface DatasetConfigProps {
     modelVersion?: string;
     onPathsChange?: (paths: string[]) => void;
     onSetsChange?: (sets: { name: string, path: string }[]) => void;
+    onConfigSaved?: () => void;
 }
 
 const DEFAULT_CONFIG = {
@@ -46,7 +47,7 @@ const DEFAULT_CONFIG = {
 };
 
 
-export function DatasetConfig({ mode = 'training', importedConfig, modelType, modelVersion, onPathsChange, onSetsChange }: DatasetConfigProps) {
+export function DatasetConfig({ mode = 'training', importedConfig, modelType, modelVersion, onPathsChange, onSetsChange, onConfigSaved }: DatasetConfigProps) {
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
     const [formData, setFormData] = useState(DEFAULT_CONFIG);
@@ -437,10 +438,13 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                 }
 
                 const tomlContent = trainLines.join('\n');
-                await ipc.invoke('save-to-date-folder', {
+                const result = await ipc.invoke('save-to-date-folder', {
                     filename: 'dataset.toml',
                     content: tomlContent
                 });
+                if (!result?.success) {
+                    throw new Error(result?.error || 'Failed to save dataset.toml');
+                }
 
             } else {
                 // Evaluation mode
@@ -472,6 +476,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
             if (!silent) {
                 showToast(t('common.config_saved'), 'success');
             }
+            onConfigSaved?.();
         } catch (error: any) {
             console.error('Error saving config:', error);
             if (!silent) {

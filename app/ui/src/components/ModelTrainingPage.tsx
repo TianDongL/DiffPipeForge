@@ -20,6 +20,7 @@ interface ModelTrainingPageProps {
     setGlobalModelVersion?: (version: string) => void;
     evalSets?: { name: string, path: string }[];
     projectPath?: string | null;
+    onConfigSaved?: () => void;
 }
 
 // Default constants
@@ -89,7 +90,8 @@ export function ModelTrainingPage({
     setGlobalModelType,
     setGlobalModelVersion,
     evalSets = [],
-    projectPath
+    projectPath,
+    onConfigSaved
 }: ModelTrainingPageProps) {
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
@@ -909,6 +911,7 @@ export function ModelTrainingPage({
                 if (!silent) {
                     showToast(t('common.config_saved'), 'success');
                 }
+                onConfigSaved?.();
             }
         } catch (e) {
             console.error("Failed to save config:", e);

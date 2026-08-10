@@ -13,6 +13,7 @@ import { estimateTrainingProgress, TrainingProgressEstimate } from '@/lib/traini
 
 interface TrainingLauncherPageProps {
     projectPath?: string | null;
+    configRevision?: number;
 }
 
 type MiniMaxValidationKey =
@@ -96,7 +97,7 @@ const validateMiniMaxH3Config = (configValue: unknown): MiniMaxValidationKey | n
     return null;
 };
 
-export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps) {
+export function TrainingLauncherPage({ projectPath, configRevision = 0 }: TrainingLauncherPageProps) {
     const { t } = useTranslation();
     const { showToast } = useGlassToast();
     const [isTraining, setIsTraining] = useState(false);
@@ -229,7 +230,7 @@ export function TrainingLauncherPage({ projectPath }: TrainingLauncherPageProps)
             }
         };
         loadConfig();
-    }, [projectPath, trainingConfigPath, startParams.num_gpus]);
+    }, [projectPath, trainingConfigPath, startParams.num_gpus, configRevision]);
 
     const handleStartTraining = async () => {
         if (!projectPath) {
