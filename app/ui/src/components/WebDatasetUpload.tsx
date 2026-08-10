@@ -6,6 +6,9 @@ import { GlassButton } from './ui/GlassButton';
 
 interface WebDatasetUploadProps {
     onUploaded: (path: string) => void;
+    onBusyChange?: (busy: boolean) => void;
+    datasetType?: 'training' | 'validation';
+    disabled?: boolean;
 }
 
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi']);
@@ -25,7 +28,7 @@ function stem(name: string): string {
     return index > 0 ? name.slice(0, index) : name;
 }
 
-export function WebDatasetUpload({ onUploaded }: WebDatasetUploadProps) {
+export function WebDatasetUpload({ onUploaded, onBusyChange, datasetType = 'training', disabled = false }: WebDatasetUploadProps) {
     const { t } = useTranslation();
     const [roots, setRoots] = useState<WebRootsResponse | null>(null);
     const [files, setFiles] = useState<File[]>([]);
@@ -33,6 +36,7 @@ export function WebDatasetUpload({ onUploaded }: WebDatasetUploadProps) {
     const [sentBytes, setSentBytes] = useState(0);
     const [error, setError] = useState('');
     const [completedPath, setCompletedPath] = useState('');
+    const isValidation = datasetType === 'validation';
 
     useEffect(() => {
         void webFiles.roots().then(setRoots).catch((reason) => {
@@ -64,6 +68,7 @@ export function WebDatasetUpload({ onUploaded }: WebDatasetUploadProps) {
     const handleUpload = async () => {
         if (selection.validationError || !files.length) return;
         setBusy(true);
+        onBusyChange?.(true);
         setError('');
         setCompletedPath('');
         setSentBytes(0);
@@ -93,6 +98,7 @@ export function WebDatasetUpload({ onUploaded }: WebDatasetUploadProps) {
             setError(reason instanceof Error ? reason.message : String(reason));
         } finally {
             setBusy(false);
+            onBusyChange?.(false);
         }
     };
 
@@ -101,21 +107,29 @@ export function WebDatasetUpload({ onUploaded }: WebDatasetUploadProps) {
         : 0;
 
     return (
-        <div className="col-span-2 rounded-xl border border-dashed border-primary/30 bg-primary/5 p-4 space-y-3">
+        <div
+            className={`col-span-2 rounded-xl border border-dashed border-primary/30 bg-primary/5 p-4 space-y-3 ${disabled ? 'opacity-60' : ''}`}
+            aria-disabled={disabled}
+        >
             <div className="flex items-start justify-between gap-4">
                 <div>
-                    <div className="font-semibold flex items-center gap-2"><UploadCloud className="w-4 h-4" />{t('web_resources.upload_dataset')}</div>
-                    <div className="text-xs text-muted-foreground mt-1">{t('web_resources.upload_dataset_hint')}</div>
+                    <div className="font-semibold flex items-center gap-2">
+                        <UploadCloud className="w-4 h-4" />
+                        {t(isValidation ? 'web_resources.upload_validation_dataset' : 'web_resources.upload_dataset')}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                        {t(isValidation ? 'web_resources.upload_validation_dataset_hint' : 'web_resources.upload_dataset_hint')}
+                    </div>
                     {roots && <div className="text-[11px] text-muted-foreground mt-1">{t('web_resources.upload_destination')}: {roots.uploadRoot}</div>}
                 </div>
-                <label className="cursor-pointer rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-2 text-sm whitespace-nowrap">
+                <label className={`rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm whitespace-nowrap ${disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-white/10'}`}>
                     {t('web_resources.choose_files')}
                     <input
                         type="file"
                         accept=".mp4,.mov,.mkv,.webm,.avi,.txt"
                         multiple
                         className="hidden"
-                        disabled={busy}
+                        disabled={busy || disabled}
                         onChange={(event) => {
                             setFiles(Array.from(event.target.files || []));
                             setError('');
@@ -125,6 +139,10 @@ export function WebDatasetUpload({ onUploaded }: WebDatasetUploadProps) {
                     />
                 </label>
             </div>
+
+            {disabled && isValidation && (
+                <div className="text-xs text-muted-foreground">{t('web_resources.upload_validation_disabled')}</div>
+            )}
 
             {files.length > 0 && (
                 <div className="rounded-lg bg-black/15 p-3 text-sm">
@@ -143,13 +161,13 @@ export function WebDatasetUpload({ onUploaded }: WebDatasetUploadProps) {
                     <div className="text-xs text-muted-foreground">{t('web_resources.uploading')} {percent}% · {formatBytes(sentBytes)} / {formatBytes(selection.totalBytes)}</div>
                 </div>
             )}
-            {completedPath && <div className="flex items-center gap-2 text-sm text-emerald-400 break-all"><CheckCircle2 className="w-4 h-4 flex-shrink-0" />{t('web_resources.upload_complete')}: {completedPath}</div>}
+            {completedPath && <div className="flex items-center gap-2 text-sm text-emerald-400 break-all"><CheckCircle2 className="w-4 h-4 flex-shrink-0" />{t(isValidation ? 'web_resources.upload_validation_complete' : 'web_resources.upload_complete')}: {completedPath}</div>}
             {error && <div className="text-sm text-red-400">{error}</div>}
 
             <div className="flex justify-end">
-                <GlassButton type="button" onClick={() => void handleUpload()} disabled={busy || !files.length || !!selection.validationError}>
+                <GlassButton type="button" onClick={() => void handleUpload()} disabled={disabled || busy || !files.length || !!selection.validationError}>
                     {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UploadCloud className="w-4 h-4 mr-2" />}
-                    {t('web_resources.upload_and_use')}
+                    {t(isValidation ? 'web_resources.upload_and_use_validation_dataset' : 'web_resources.upload_and_use')}
                 </GlassButton>
             </div>
         </div>

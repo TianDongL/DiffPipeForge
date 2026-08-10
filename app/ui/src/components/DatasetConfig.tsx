@@ -52,6 +52,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
     const { showToast } = useGlassToast();
     const [formData, setFormData] = useState(DEFAULT_CONFIG);
     const [webPickerOpen, setWebPickerOpen] = useState(false);
+    const [webDatasetUploading, setWebDatasetUploading] = useState(false);
     const webPickCallbackRef = useRef<((path: string) => void) | null>(null);
 
     // Notify parent of path changes
@@ -192,6 +193,20 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
         const newSets = [...formData.eval_sets];
         newSets[index] = { ...newSets[index], path };
         setFormData(prev => ({ ...prev, eval_sets: newSets }));
+    };
+
+    const handleWebDatasetUploaded = (path: string) => {
+        setFormData(previous => {
+            if (mode === 'training') {
+                return { ...previous, input_path: path };
+            }
+
+            const evalSets = previous.eval_sets.length > 0
+                ? [...previous.eval_sets]
+                : [{ name: 'validation_set', path: '' }];
+            evalSets[0] = { ...evalSets[0], path };
+            return { ...previous, eval_sets: evalSets };
+        });
     };
 
     const addEvalSet = () => {
@@ -538,9 +553,12 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                     }}
                 >
                     <div className="grid gap-6 md:grid-cols-2">
-                        {isTraining && !isElectron && (
+                        {!isElectron && (
                             <WebDatasetUpload
-                                onUploaded={(path) => setFormData((previous) => ({ ...previous, input_path: path }))}
+                                datasetType={isTraining ? 'training' : 'validation'}
+                                disabled={!isTraining && formData.disable_validation === 'true'}
+                                onBusyChange={setWebDatasetUploading}
+                                onUploaded={handleWebDatasetUploaded}
                             />
                         )}
                         {isTraining ? (
@@ -583,10 +601,11 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                                             }
                                             handleChange({ target: { name: 'disable_validation', value: newValue } } as any);
                                         }}
+                                        disabled={webDatasetUploading}
                                         className={`w-full py-4 px-6 rounded-xl border flex items-center justify-center gap-3 transition-all duration-300 group ${formData.disable_validation === 'true'
                                             ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20'
                                             : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                                            }`}
+                                            } disabled:cursor-not-allowed disabled:opacity-50`}
                                     >
                                         {formData.disable_validation === 'true' ? (
                                             <>
@@ -649,7 +668,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                                                     variant="destructive"
                                                     size="icon"
                                                     onClick={() => removeEvalSet(index)}
-                                                    disabled={formData.eval_sets.length <= 1 || formData.disable_validation === 'true'}
+                                                    disabled={formData.eval_sets.length <= 1 || formData.disable_validation === 'true' || webDatasetUploading}
                                                 >
                                                     <Trash2 className="w-4 h-4" />
                                                 </GlassButton>
@@ -661,7 +680,7 @@ export function DatasetConfig({ mode = 'training', importedConfig, modelType, mo
                                         variant="outline"
                                         className="w-full border-dashed"
                                         onClick={addEvalSet}
-                                        disabled={formData.disable_validation === 'true'}
+                                        disabled={formData.disable_validation === 'true' || webDatasetUploading}
                                     >
                                         <Plus className="w-4 h-4 mr-2" />
                                         {t('dataset.add_eval_set')}
